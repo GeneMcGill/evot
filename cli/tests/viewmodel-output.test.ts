@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeAll } from 'bun:test'
-import { buildOutputBlocks, THINKING_FOLD_ROWS } from '../src/term/viewmodel/output.js'
+import { buildOutputBlocks, THINKING_FOLD_ROWS, THINKING_COLLAPSED_ROWS } from '../src/term/viewmodel/output.js'
 import { blocksToLines, styledLineToAnsi, paintBackground, line, colored, dim } from '../src/term/viewmodel/types.js'
 import { buildUserMessage, buildAssistantLines, buildToolCard, buildEventCard, type OutputLine } from '../src/render/output.js'
 import { getTheme } from '../src/render/theme/index.js'
@@ -126,24 +126,21 @@ describe('buildOutputBlocks', () => {
   test('thinking body is muted, not dim-italic, and sits on the text column', () => {
     const output = assistantMessageToOutputLines([
       { type: 'thinking', contentIndex: 0, text: 'Planning the change' },
-    ])
+    ], false, { streaming: true })
     const rendered = blocksToLines(buildOutputBlocks(output)).join('\n')
     expect(rendered).not.toContain('\x1b[3m')
     expect(rendered).toContain(getTheme().thinkText.paint('Planning the change'))
     expect(stripAnsi(rendered)).toContain('✻ Planning the change')
   })
 
-  test('short reasoning is shown in full, with no summary or duration row', () => {
-    const plain = renderPlainWithColumns(assistantMessageToOutputLines([
-      { type: 'thinking', contentIndex: 0, text: 'line one\n\nline two' },
-    ]), 40)
-    expect(plain).toContain('line one')
-    expect(plain).toContain('line two')
-    // No `Thought`/`Thinking…` header row: a sub-second reasoning block reported
-    // a meaningless duration, and the summary row hid the useful part.
-    expect(plain).not.toContain('Thought')
-    expect(plain).not.toContain('Thinking')
-    expect(plain).not.toContain('ctrl+o')
+  test('a finished thought, however short, leaves the transcript', () => {
+    const blocks = [{ type: 'thinking' as const, contentIndex: 0, text: 'line one' }]
+    const live = renderPlainWithColumns(assistantMessageToOutputLines(blocks, false, { streaming: true }), 40)
+    expect(live).toContain('✻ line one')
+    const done = renderPlainWithColumns(assistantMessageToOutputLines(blocks), 40)
+    expect(done.split('\n').filter(Boolean)).toEqual([])
+    // ctrl+o still shows it.
+    expect(renderPlainWithColumns(assistantMessageToOutputLines(blocks, true), 40)).toContain('✻ line one')
   })
 
   test('reasoning leads with an accent ✻ and indents continuations', () => {
@@ -176,26 +173,27 @@ describe('buildOutputBlocks', () => {
     for (const line of lines) expect(stringWidth(line)).toBeLessThanOrEqual(40)
   })
 
-  test('thinking to text transition has the same blank-line boundary before commit', () => {
+  test('once the answer starts, the thought is gone and the answer keeps its block margin', () => {
     const output = assistantMessageToOutputLines([
       { type: 'thinking', contentIndex: 0, text: 'Investigating config' },
       { type: 'text', contentIndex: 1, text: 'Visible answer' },
     ])
     const plain = stripAnsi(blocksToLines(buildOutputBlocks(output)).join('\n'))
-
-    expect(plain).toContain('✻ Investigating config\n\n⏺ Visible answer')
+    expect(plain).not.toContain('Investigating config')
+    expect(plain).toBe('\n⏺ Visible answer')
   })
 
-  test('a short streaming block renders the same as a finished one', () => {
+  test('a short block streams in full with no fold hint, then disappears once finished', () => {
     const blocks = [{ type: 'thinking' as const, contentIndex: 0, text: 'line one\n\nline two' }]
     const live = renderPlainWithColumns(assistantMessageToOutputLines(blocks, false, { streaming: true }), 40)
+    expect(live).toContain('✻ line one')
+    expect(live).toContain('line two')
+    expect(live).not.toContain('ctrl+o')
     const done = renderPlainWithColumns(assistantMessageToOutputLines(blocks), 40)
-    expect(live).toBe(done)
-    expect(done).toContain('✻ line one')
-    expect(done).toContain('line two')
+    expect(done.split('\n').filter(Boolean)).toEqual([])
   })
 
-  describe('long reasoning folds to a fixed height', () => {
+  describe('long reasoning folds', () => {
     const longText = Array.from({ length: 20 }, (_, i) => `reasoning row ${i + 1}`).join('\n\n')
     const longBlock = [{ type: 'thinking' as const, contentIndex: 0, text: longText }]
     const rowsOf = (plain: string) => plain.split('\n').filter(row => row.length > 0)
@@ -205,7 +203,7 @@ describe('buildOutputBlocks', () => {
       const rows = rowsOf(plain)
       expect(rows).toHaveLength(THINKING_FOLD_ROWS)
       // The header counts what scrolled out; the newest rows stay visible.
-      expect(rows[0]).toMatch(/^✻ ↑ \d+ rows \(ctrl\+o to expand\)$/)
+      expect(rows[0]).toMatch(/^✻ ↑ \d+ rows \(ctrl\+o\)$/)
       expect(plain).toContain('reasoning row 20')
       expect(plain).not.toContain('reasoning row 1\n')
 
@@ -216,78 +214,95 @@ describe('buildOutputBlocks', () => {
       expect(next).toContain('reasoning row 21')
     })
 
-    test('once committed, the fold keeps the head and tail at the same height', () => {
+    test('once finished, the block renders nothing at all', () => {
       const plain = renderPlainWithColumns(assistantMessageToOutputLines(longBlock), 80)
-      const rows = rowsOf(plain)
-      expect(rows).toHaveLength(THINKING_FOLD_ROWS)
-      expect(rows[0]).toBe('✻ reasoning row 1')
-      expect(rows.some(row => /^ {2}… \d+ rows hidden \(ctrl\+o to expand\)$/.test(row))).toBe(true)
-      expect(rows[rows.length - 1]).toBe('  reasoning row 20')
+      expect(rowsOf(plain)).toEqual([])
+      expect(THINKING_COLLAPSED_ROWS).toBe(0)
     })
 
-    test('committing the streamed block changes no row count', () => {
-      const live = renderWithColumns(assistantMessageToOutputLines(longBlock, false, { streaming: true }), 80)
-      const done = renderWithColumns(assistantMessageToOutputLines(longBlock), 80)
-      expect(live.split('\n')).toHaveLength(done.split('\n').length)
+    test('the answer after a vanished thought starts on its own block margin', () => {
+      const plain = renderPlainWithColumns(assistantMessageToOutputLines([
+        ...longBlock,
+        { type: 'text' as const, contentIndex: 1, text: 'Visible answer' },
+      ]), 80)
+      expect(plain).toBe('\n⏺ Visible answer')
     })
 
-    test('ctrl+o (expanded) lifts the fold in both live and committed views', () => {
+    test('ctrl+o (expanded) lifts the fold in both live and finished views', () => {
       for (const streaming of [true, false]) {
         const plain = renderPlainWithColumns(assistantMessageToOutputLines(longBlock, true, { streaming }), 80)
         expect(plain).toContain('reasoning row 1')
         expect(plain).toContain('reasoning row 20')
         expect(plain).not.toContain('ctrl+o')
+        expect(plain).not.toContain('Thought')
         expect(rowsOf(plain).length).toBeGreaterThan(THINKING_FOLD_ROWS)
       }
     })
 
-    test('the fold counts visual rows after wrapping, so CJK and long lines never overflow it', () => {
+    test('the live fold counts visual rows after wrapping, so CJK and long lines never overflow it', () => {
       const wide = [{ type: 'thinking' as const, contentIndex: 0, text: '我们需要仔细检查每一个渲染路径的宽度计算以及换行行为'.repeat(4) }]
-      for (const streaming of [true, false]) {
-        const plain = renderPlainWithColumns(assistantMessageToOutputLines(wide, false, { streaming }), 24)
-        const rows = rowsOf(plain)
-        expect(rows).toHaveLength(THINKING_FOLD_ROWS)
-        for (const row of rows) expect(stringWidth(row)).toBeLessThanOrEqual(24)
-      }
+      const live = rowsOf(renderPlainWithColumns(assistantMessageToOutputLines(wide, false, { streaming: true }), 24))
+      expect(live).toHaveLength(THINKING_FOLD_ROWS)
+      for (const row of live) expect(stringWidth(row)).toBeLessThanOrEqual(24)
+      const done = rowsOf(renderPlainWithColumns(assistantMessageToOutputLines(wide), 24))
+      expect(done).toHaveLength(THINKING_COLLAPSED_ROWS)
     })
 
-    test('the budget is the boundary: at the budget nothing folds, one row over folds to the budget', () => {
+    test('the live budget is the boundary: at the budget nothing folds, one row over folds to the budget', () => {
       const rowsText = (n: number) => Array.from({ length: n }, (_, i) => `row ${i + 1}`).join('\n\n')
-      for (const streaming of [true, false]) {
-        const atBudget = renderPlainWithColumns(assistantMessageToOutputLines(
-          [{ type: 'thinking', contentIndex: 0, text: rowsText(THINKING_FOLD_ROWS) }], false, { streaming }), 80)
-        expect(rowsOf(atBudget)).toHaveLength(THINKING_FOLD_ROWS)
-        expect(atBudget).not.toContain('ctrl+o')
-        const overBudget = renderPlainWithColumns(assistantMessageToOutputLines(
-          [{ type: 'thinking', contentIndex: 0, text: rowsText(THINKING_FOLD_ROWS + 1) }], false, { streaming }), 80)
-        expect(rowsOf(overBudget)).toHaveLength(THINKING_FOLD_ROWS)
-        expect(overBudget).toContain('ctrl+o')
-      }
+      const atBudget = renderPlainWithColumns(assistantMessageToOutputLines(
+        [{ type: 'thinking', contentIndex: 0, text: rowsText(THINKING_FOLD_ROWS) }], false, { streaming: true }), 80)
+      expect(rowsOf(atBudget)).toHaveLength(THINKING_FOLD_ROWS)
+      expect(atBudget).not.toContain('ctrl+o')
+      const overBudget = renderPlainWithColumns(assistantMessageToOutputLines(
+        [{ type: 'thinking', contentIndex: 0, text: rowsText(THINKING_FOLD_ROWS + 1) }], false, { streaming: true }), 80)
+      expect(rowsOf(overBudget)).toHaveLength(THINKING_FOLD_ROWS)
+      expect(overBudget).toContain('ctrl+o')
     })
 
-    test('a tool call landing after live reasoning flips tail to head-and-tail at the same height', () => {
-      const before = assistantMessageToOutputLines(longBlock, false, { streaming: true })
+    test('a tool call landing after live reasoning collapses the reasoning while the message still streams', () => {
       const after = assistantMessageToOutputLines([
         ...longBlock,
         { type: 'tool_call', contentIndex: 1, toolCall: { id: 'c', name: 'read', args: { path: 'a' }, status: 'running' } },
       ], false, { streaming: true })
-      const thinkingRows = (lines: OutputLine[]) =>
-        blocksToLines(buildOutputBlocks(lines.filter(l => l.kind === 'thinking'), { columns: 80 })).length
-      expect(thinkingRows(after)).toBe(thinkingRows(before))
+      // Finished reasoning is hidden; the transient run status is separate.
       const plain = renderPlainWithColumns(after, 80)
-      expect(plain).toContain('rows hidden')
+      expect(plain).not.toContain('reasoning row')
       expect(plain).not.toContain('↑ ')
+      expect(plain).toContain('◫ read')
     })
 
-    test('a finished reasoning block ahead of the live one already wears its committed fold', () => {
-      const content = [
+    test('real text replaces reasoning immediately, while empty deltas leave its tail untouched', () => {
+      const tight = Array.from({ length: 20 }, (_, i) => `reasoning row ${i + 1}`).join('\n')
+      const heightAndRows = (text: string) => renderPlainWithColumns(assistantMessageToOutputLines([
+        { type: 'thinking' as const, contentIndex: 0, text: tight },
+        { type: 'text' as const, contentIndex: 1, text },
+      ], false, { streaming: true }), 80).split('\n')
+      const live = heightAndRows('')
+      expect(live).toHaveLength(1 + THINKING_FOLD_ROWS)
+      expect(live[1]).toBe('✻ ↑ 18 rows (ctrl+o)')
+
+      expect(heightAndRows('   ')).toEqual(live)
+      const one = heightAndRows('Visible')
+      expect(one).toEqual(['', '⏺ Visible'])
+
+      // No old thought content returns as the answer grows.
+      const three = heightAndRows('Visible\n\nanswer')
+      expect(three).toEqual(['', '⏺ Visible', '', '  answer'])
+
+      // From here the region only grows.
+      expect(heightAndRows('Visible\n\nanswer\n\nmore').length).toBeGreaterThan(three.length)
+    })
+
+    test('a thought two blocks back is gone outright while the live block streams', () => {
+      const plain = renderPlainWithColumns(assistantMessageToOutputLines([
         { type: 'thinking' as const, contentIndex: 0, text: longText },
-        { type: 'text' as const, contentIndex: 1, text: 'Visible answer so far' },
-      ]
-      const plain = renderPlainWithColumns(assistantMessageToOutputLines(content, false, { streaming: true }), 80)
-      expect(plain).toContain('✻ reasoning row 1')
-      expect(plain).toContain('rows hidden')
-      expect(plain).not.toContain('↑ ')
+        { type: 'text' as const, contentIndex: 1, text: 'first' },
+        { type: 'thinking' as const, contentIndex: 2, text: 'again' },
+        { type: 'text' as const, contentIndex: 3, text: 'second' },
+      ], false, { streaming: true }), 80)
+      expect(plain).not.toContain('reasoning row')
+      expect(plain).toContain('⏺ first')
     })
   })
 
@@ -637,7 +652,9 @@ describe('tool cards: lifecycle-tinted slabs', () => {
     // pi's Box: the border cell stays blank so card content sits on the same
     // column as the rail-led user text. No rail glyph on tool cards.
     expect(stripAnsi(body[1]!).startsWith('  ⌘ bash')).toBe(true)
-    expect(stripAnsi(body[3]!)).toContain('ctrl+o to expand')
+    // Headline, status row (which carries the fold), nothing else.
+    expect(stripAnsi(body[2]!)).toMatch(/3 lines .*\(ctrl\+o\)/)
+    expect(body).toHaveLength(4)
     expect(stripAnsi(rows.join('\n'))).not.toContain('┃')
   })
 
@@ -806,9 +823,20 @@ describe('tool cards: lifecycle-tinted slabs', () => {
       ...buildToolCard(call('done', { result: 'ok' })),
       ...buildToolCard({ ...call('done', { result: 'ok' }), id: 't2' } as Parameters<typeof buildToolCard>[0]),
     ], 30).split('\n')
-    // margin, pad, head, status, body, pad, margin, pad, ...
+    // margin, pad, head, status, pad, margin, pad, head, status, pad
     const margins = rows.map((r, i) => (r === '' ? i : -1)).filter(i => i >= 0)
-    expect(margins.length).toBe(2)
+    expect(margins).toEqual([0, 5])
+    expect(rows).toHaveLength(10)
+  })
+
+  test('a card after a vanished thought still opens with margin and pad', () => {
+    const rows = renderPlainWithColumns([
+      { id: 'th', kind: 'thinking', text: 'gone', thinkingFold: 'collapsed' } as OutputLine,
+      ...buildToolCard(call('done', { result: 'ok' })),
+    ], 30).split('\n')
+    const head = rows.findIndex(r => r.includes('⌘ bash'))
+    expect(rows[head - 1]).toBe(' '.repeat(30))
+    expect(rows[head - 2]).toBe('')
   })
 
   test('bare tool lines without card membership keep the unfilled layout', () => {

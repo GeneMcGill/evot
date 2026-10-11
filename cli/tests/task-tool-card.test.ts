@@ -113,7 +113,7 @@ describe('task tool settled status', () => {
       elapsed_ms: 107_000,
       total_lines: 412,
     }))
-    expect(statusLine(lines)).toBe('  ✓ · completed · exit 0 · 1m 47s · 412 lines')
+    expect(statusLine(lines)).toBe('  ✓ · completed · exit 0 · 1m 47s · 412 lines (ctrl+o)')
   })
 
   test('a failed task is marked failed, not as a successful poll', () => {
@@ -133,7 +133,7 @@ describe('task tool settled status', () => {
   test('a stopped task reads as stopped and stays non-failing', () => {
     // A stop is a deliberate outcome, not an error.
     const lines = render(settled({ status: 'killed', elapsed_ms: 300_000 }))
-    expect(statusLine(lines)).toBe('  ✓ · stopped · 5m')
+    expect(statusLine(lines)).toBe('  ✓ · stopped · 5m · 1 line (ctrl+o)')
   })
 
   test('a user cancellation is named as cancelled, not merely stopped', () => {
@@ -144,7 +144,7 @@ describe('task tool settled status', () => {
       elapsed_ms: 21_000,
       stopped_by_user: true,
     }))
-    expect(statusLine(lines)).toBe('  ✓ · cancelled by user · 21s')
+    expect(statusLine(lines)).toBe('  ✓ · cancelled by user · 21s · 1 line (ctrl+o)')
   })
 
   test('a model stop is not attributed to the user', () => {
@@ -153,7 +153,7 @@ describe('task tool settled status', () => {
       elapsed_ms: 21_000,
       stopped_by_user: false,
     }))
-    expect(statusLine(lines)).toBe('  ✓ · stopped · 21s')
+    expect(statusLine(lines)).toBe('  ✓ · stopped · 21s · 1 line (ctrl+o)')
   })
 
   test('a missing attribution flag degrades to a plain stop', () => {
@@ -161,7 +161,7 @@ describe('task tool settled status', () => {
     // details, so a missing key is a real parse case rather than a type error.
     // Attributing an unattributed stop to the user would be the worse guess.
     const lines = render(settled({ status: 'killed', elapsed_ms: 21_000 }))
-    expect(statusLine(lines)).toBe('  ✓ · stopped · 21s')
+    expect(statusLine(lines)).toBe('  ✓ · stopped · 21s · 1 line (ctrl+o)')
   })
 
   test('a legacy expired wait still renders from a replayed transcript', () => {
@@ -175,7 +175,7 @@ describe('task tool settled status', () => {
       elapsed_ms: 45_000,
       total_lines: 12,
     }))
-    expect(statusLine(lines)).toBe('  ● · running in background · wait timed out · 45s · 12 lines')
+    expect(statusLine(lines)).toBe('  ● · running in background · wait timed out · 45s · 12 lines (ctrl+o)')
   })
 
   test('a stalled wait names the silence so the hand-back explains itself', () => {
@@ -189,7 +189,7 @@ describe('task tool settled status', () => {
       quiet_ms: 10 * 60_000,
       total_lines: 3,
     }))
-    expect(statusLine(lines)).toBe('  ● · running in background · stalled, quiet 10m · 12m · 3 lines')
+    expect(statusLine(lines)).toBe('  ● · running in background · stalled, quiet 10m · 12m · 3 lines (ctrl+o)')
   })
 
   test('a wait the user ended reads as plainly detached, not as a timeout', () => {
@@ -204,7 +204,7 @@ describe('task tool settled status', () => {
       elapsed_ms: 45_000,
       total_lines: 12,
     }))
-    expect(statusLine(lines)).toBe('  ● · running in background · 45s · 12 lines')
+    expect(statusLine(lines)).toBe('  ● · running in background · 45s · 12 lines (ctrl+o)')
   })
 
   test('a non-blocking check that found work in progress omits the timeout note', () => {
@@ -213,7 +213,7 @@ describe('task tool settled status', () => {
       status: 'running',
       elapsed_ms: 3_000,
     }))
-    expect(statusLine(lines)).toBe('  ● · running in background · 3s')
+    expect(statusLine(lines)).toBe('  ● · running in background · 3s · 1 line (ctrl+o)')
   })
 
   test('a backgrounded task names the background, a foreground one does not', () => {
@@ -227,14 +227,14 @@ describe('task tool settled status', () => {
       status: 'running',
       elapsed_ms: 3_000,
     }))
-    expect(statusLine(background)).toBe('  ● · running in background · 3s')
+    expect(statusLine(background)).toBe('  ● · running in background · 3s · 1 line (ctrl+o)')
 
     const foreground = render(settled({
       retrieval_status: 'not_ready',
       status: 'running_foreground',
       elapsed_ms: 3_000,
     }))
-    expect(statusLine(foreground)).toBe('  ● · still running · 3s')
+    expect(statusLine(foreground)).toBe('  ● · still running · 3s · 1 line (ctrl+o)')
   })
 
   test('an engine-side error still renders as a failure', () => {
@@ -244,18 +244,18 @@ describe('task tool settled status', () => {
 
   test('a task with no captured output omits the line count', () => {
     const lines = render(settled({ status: 'completed', exit_code: 0, elapsed_ms: 2_000, total_lines: 0 }))
-    expect(statusLine(lines)).toBe('  ✓ · completed · exit 0 · 2s')
+    expect(statusLine(lines)).toBe('  ✓ · completed · exit 0 · 2s · 1 line (ctrl+o)')
   })
 
   test('missing elapsed time degrades instead of printing NaN', () => {
     const lines = render(settled({ status: 'completed', exit_code: 0 }))
-    expect(statusLine(lines)).toBe('  ✓ · completed · exit 0')
+    expect(statusLine(lines)).toBe('  ✓ · completed · exit 0 · 1 line (ctrl+o)')
   })
 
   test('an unrecognized status is shown verbatim rather than dropped', () => {
     // Forward compatibility: a status added engine-side should still surface.
     const lines = render(settled({ status: 'paused', elapsed_ms: 1_000 }))
-    expect(statusLine(lines)).toBe('  ✓ · paused · 1s')
+    expect(statusLine(lines)).toBe('  ✓ · paused · 1s · 1 line (ctrl+o)')
   })
 
   test('elapsed formatting matches the background panel spelling', () => {
@@ -269,7 +269,7 @@ describe('task tool settled status', () => {
     ]
     for (const [elapsed_ms, expected] of cases) {
       const lines = render(settled({ status: 'completed', exit_code: 0, elapsed_ms }))
-      expect(statusLine(lines)).toBe(`  ✓ · completed · exit 0 · ${expected}`)
+      expect(statusLine(lines)).toBe(`  ✓ · completed · exit 0 · ${expected} · 1 line (ctrl+o)`)
     }
   })
 
@@ -278,6 +278,6 @@ describe('task tool settled status', () => {
     // reflow when a card settles.
     const lines = render(settled({ status: 'completed', exit_code: 0, elapsed_ms: 1_000 }))
     expect(lines[0]?.startsWith('◷ background shell')).toBe(true)
-    expect(lines[1]).toBe('  ✓ · completed · exit 0 · 1s')
+    expect(lines[1]).toBe('  ✓ · completed · exit 0 · 1s · 1 line (ctrl+o)')
   })
 })

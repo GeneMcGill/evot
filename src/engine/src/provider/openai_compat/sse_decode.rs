@@ -320,7 +320,15 @@ async fn process_sse_chunk(
         // Handle tool calls
         if let Some(tool_calls) = &delta.tool_calls {
             for tc in tool_calls {
-                let tc_index = tc.index as usize;
+                // A chunk that names an id already being buffered belongs to
+                // that call even when upstream moved it to a new `index`;
+                // otherwise one call would become two blocks sharing an id.
+                let known = tc
+                    .id
+                    .as_deref()
+                    .filter(|id| !id.is_empty())
+                    .and_then(|id| tool_call_buffers.iter().position(|buf| buf.id == id));
+                let tc_index = known.unwrap_or(tc.index as usize);
                 while tool_call_buffers.len() <= tc_index {
                     tool_call_buffers.push(ToolCallBuffer::default());
                 }
@@ -422,7 +430,11 @@ async fn finalize_tool_calls(
     content: &mut Vec<Content>,
     tool_call_buffers: &[ToolCallBuffer],
 ) {
-    for buf in tool_call_buffers.iter() {
+    // Sparse upstream indices leave untouched slots; they are not calls.
+    for buf in tool_call_buffers
+        .iter()
+        .filter(|buf| buf.content_index.is_some())
+    {
         let args = crate::provider::json_repair::try_repair_json(&buf.arguments)
             .unwrap_or(serde_json::Value::Object(Default::default()));
         let content_index = match buf.content_index {

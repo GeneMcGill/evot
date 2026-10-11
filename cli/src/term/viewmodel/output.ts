@@ -16,14 +16,16 @@ export interface OutputContext {
 }
 
 /**
- * Height of a folded reasoning block, in visual rows. The live tail window and
- * the committed head-and-tail fold both come out at exactly this many rows,
- * so replacing one with the other never moves the footer or repaints
- * scrollback. Short reasoning (at or under the budget) is shown in full.
+ * Height of the live reasoning window, in visual rows: a header counting the
+ * rows that scrolled out, then the newest rows. Reasoning at or under this
+ * budget streams in full. Once the block is finished (another block follows
+ * it, or the message is committed) it disappears, as in kiro-cli: reasoning
+ * is something to watch while it happens, not a record to keep. ctrl+o still
+ * shows every finished block in full.
  */
-export const THINKING_FOLD_ROWS = 6
-/** Rows kept from the start of a committed fold; the rest of the budget is tail. */
-const THINKING_FOLD_HEAD_ROWS = 2
+export const THINKING_FOLD_ROWS = 3
+/** Height of a finished reasoning block: it leaves the transcript entirely. */
+export const THINKING_COLLAPSED_ROWS = 0
 
 // Transcript panels: a full-width filled slab with a blank padded row above
 // and below — pi's Box(paddingY=1, bg). The fill is what separates "input and
@@ -208,7 +210,8 @@ export function buildOutputBlocks(lines: OutputLine[], context: OutputContext | 
           && lines[end]!.thinkingFold === ol.thinkingFold
         ) end++
         const run = lines.slice(index, end)
-        blocks.push(buildThinkingBlock(run, prevKind !== 'thinking', initialContext.columns))
+        const thinking = buildThinkingBlock(run, prevKind !== 'thinking', initialContext.columns)
+        if (thinking) blocks.push(thinking)
         index = end - 1
         break
       }
@@ -305,15 +308,16 @@ export function buildOutputBlocks(lines: OutputLine[], context: OutputContext | 
  * italic — dim italic on a dark terminal was barely legible, especially for
  * CJK. Continuations indent under the marker.
  *
- * A block over the row budget folds to exactly THINKING_FOLD_ROWS rows:
- *   tail   — a header counting the rows above, then the newest rows. Used
- *            while streaming, so the window scrolls in place like `tail -f`
- *            and the live region's height stays constant.
- *   middle — the first rows, a hidden-row hint, then the last rows. Used
- *            once committed. Same height as `tail`, so the commit that swaps
- *            one for the other changes no row position.
+ * Folds, applied to the visual rows after wrapping:
+ *   tail      — over the budget while streaming: a header counting the rows
+ *               above, then the newest rows, so the window scrolls in place
+ *               like `tail -f` and the live region's height stays constant.
+ *   collapsed — the block is finished: it renders nothing, so finished
+ *               reasoning stops taking up the screen. The shrink from `tail`
+ *               to nothing happens while the block is still in the
+ *               repaintable live region above the footer.
  */
-function buildThinkingBlock(run: OutputLine[], isBlockStart: boolean, columns?: number): ViewBlock {
+function buildThinkingBlock(run: OutputLine[], isBlockStart: boolean, columns?: number): ViewBlock | undefined {
   const theme = getTheme()
   const avail = columns ? Math.max(1, columns - 2) : 0
   const rows: StyledSpan[] = []
@@ -330,24 +334,15 @@ function buildThinkingBlock(run: OutputLine[], isBlockStart: boolean, columns?: 
   const marginTop = isBlockStart ? 1 : 0
 
   const fold = run[0]?.thinkingFold
+  if (fold === 'collapsed') return undefined
   if (fold === undefined || rows.length <= THINKING_FOLD_ROWS) {
     return block(rows.map((body, k) => row(body, k === 0)), marginTop)
   }
-  if (fold === 'tail') {
-    const visible = rows.slice(rows.length - (THINKING_FOLD_ROWS - 1))
-    const hidden = rows.length - visible.length
-    return block([
-      row(hint(`↑ ${hidden} rows (ctrl+o to expand)`), true),
-      ...visible.map(body => row(body, false)),
-    ], marginTop)
-  }
-  const head = rows.slice(0, THINKING_FOLD_HEAD_ROWS)
-  const tail = rows.slice(rows.length - (THINKING_FOLD_ROWS - THINKING_FOLD_HEAD_ROWS - 1))
-  const hidden = rows.length - head.length - tail.length
+  const visible = rows.slice(rows.length - (THINKING_FOLD_ROWS - 1))
+  const hidden = rows.length - visible.length
   return block([
-    ...head.map((body, k) => row(body, k === 0)),
-    row(hint(`… ${hidden} rows hidden (ctrl+o to expand)`), false),
-    ...tail.map(body => row(body, false)),
+    row(hint(`↑ ${hidden} rows (ctrl+o)`), true),
+    ...visible.map(body => row(body, false)),
   ], marginTop)
 }
 

@@ -955,7 +955,7 @@ describe('term stream machine', () => {
       removed_lines: 1,
     })
     const card = completed ? buildToolCard(completed) : []
-    expect(card[1]!.text).toBe('  ✓ · 1 replacement · +1 −1 · 9ms')
+    expect(card[1]!.text).toBe('  ✓ · 1 replacement · +1 −1')
     expect(card.map(line => line.text).join('\n')).toContain('+new')
   })
 
@@ -1075,7 +1075,7 @@ describe('term stream machine', () => {
       durationMs: 12,
     })
     expect(completed[0]!.text).toBe('◫ read  src/a.rs')
-    expect(completed[1]!.text).toBe('  ✓ · 1 line · 12ms')
+    expect(completed[1]!.text).toBe('  ✓ · 1 line')
   })
 
   test('queued write streams its full diff body while edit stays a stable summary', () => {
@@ -1209,7 +1209,7 @@ describe('term stream machine', () => {
     const completedText = completed.map(line => line.text).join('\n')
     expect(completedText).toContain('-old')
     expect(completedText).toContain('+new')
-    expect(completedText).toContain('✓ · 12ms')
+    expect(completedText).toMatch(/✓\n/)
     expect(completedText).not.toContain('applying changes')
   })
 

@@ -11,7 +11,7 @@
 import { providerFailurePresentation } from '../provider/error-presentation.js'
 import { renderMarkdown, renderThinkingMarkdown } from './markdown.js'
 import { colorizeUnifiedDiffRows, type DiffRowKind } from './diff.js'
-import { truncate, formatDuration, formatElapsed, toolResultLines, formatBashCommandDisplay, expandLinesHint, COLLAPSE_HINT, summarizeInline } from './format.js'
+import { truncate, formatDuration, formatElapsed, toolResultLines, formatBashCommandDisplay, EXPAND_HINT, COLLAPSE_HINT, summarizeInline } from './format.js'
 import { formatCompactionCompleted } from './verbose.js'
 import type { UICompaction, UIMessage, UIToolCall } from '../term/app/types.js'
 
@@ -235,12 +235,12 @@ function toolDraftSummary(call: UIToolCall): string {
   return 'preparing arguments'
 }
 
-function toolStatusLine(mark: '○' | '●' | '✓' | '✗', parts: string[]): OutputLine {
+function toolStatusLine(mark: '○' | '●' | '✓' | '✗', parts: string[], hint = ''): OutputLine {
   const detail = parts.filter(Boolean).join(' · ')
   return {
     id: genId('tool-status'),
     kind: 'tool',
-    text: `  ${mark}${detail ? ` · ${detail}` : ''}`,
+    text: `  ${mark}${detail ? ` · ${detail}` : ''}${hint ? ` ${hint}` : ''}`,
   }
 }
 
@@ -277,11 +277,11 @@ export interface OutputLine {
   /** Thinking text already contains markdown ANSI; apply only the outer tint. */
   thinkingStyle?: boolean
   /**
-   * Fold policy for a long reasoning block. Every thinking line of one block
-   * carries the same value; the viewmodel wraps the whole run and, when it
-   * overflows the row budget, folds it to a fixed height. `tail` keeps the
-   * newest rows (the live streaming window), `middle` keeps the head and tail
-   * (the committed compact form). Absent means never fold (expanded view).
+   * Fold policy for a reasoning block. Every thinking line of one block
+   * carries the same value; the viewmodel wraps the whole run and folds the
+   * visual rows. `tail` keeps the newest rows once the block overflows the
+   * live budget (the streaming window); `collapsed` hides finished reasoning.
+   * Absent means never fold (expanded view).
    */
   thinkingFold?: ThinkingFold
   /** System text that already carries its own ANSI styling (e.g. `/skill`).
@@ -325,7 +325,12 @@ export interface OutputLine {
   >
 }
 
-export type ThinkingFold = 'tail' | 'middle'
+/**
+ * How the viewmodel folds a reasoning block when not expanded:
+ * `tail`      the live window that scrolls while the block streams;
+ * `collapsed` a finished block: it renders nothing in the transcript.
+ */
+export type ThinkingFold = 'tail' | 'collapsed'
 
 export type ToolCardState = 'pending' | 'success' | 'error'
 
@@ -406,16 +411,15 @@ function hasReasoningContent(text: string): boolean {
 /**
  * Reasoning rows, rendered as markdown and tinted muted by the viewmodel.
  *
- * Short reasoning is shown in full. Long reasoning is folded by the viewmodel
- * to a fixed row budget unless `expanded`: while it streams, the fold is a
- * tail window that scrolls in place (the newest rows stay visible and the
- * footer never moves); once committed, the fold keeps the head and tail. Both
- * folds have the same height, so committing the message never shifts a row.
+ * Unless `expanded`, the viewmodel folds reasoning: while it streams, a short
+ * tail window scrolls in place (the newest rows stay visible and the footer
+ * never moves); once the block is finished it collapses to a single summary
+ * row, so the transcript keeps only a marker of the thought, not its text.
  * `streaming` also selects fence handling in the markdown pipeline.
  */
 export function buildThinkingLines(
   text: string,
-  options: { streaming?: boolean; expanded?: boolean } = {},
+  options: { streaming?: boolean; expanded?: boolean; fold?: ThinkingFold } = {},
 ): OutputLine[] {
   if (!text.trim() || !hasReasoningContent(text)) return []
   const rendered = renderThinkingMarkdown(text, { streaming: options.streaming })
@@ -423,7 +427,7 @@ export function buildThinkingLines(
   const cleaned = rendered.replace(/^\n+/, '').replace(/\n+$/, '')
   const thinkingFold: ThinkingFold | undefined = options.expanded
     ? undefined
-    : options.streaming ? 'tail' : 'middle'
+    : options.fold ?? (options.streaming ? 'tail' : 'collapsed')
   return cleaned.split('\n').map((line) => ({
     id: genId('think'),
     kind: 'thinking' as const,
@@ -536,11 +540,10 @@ export function buildToolCard(call: UIToolCall, expanded?: boolean, _now = Date.
     if (call.status === 'queued') {
       lines.push(toolStatusLine('○', [call.argsComplete ? 'ready' : toolDraftSummary(call)]))
     } else if (call.status === 'running') {
-      lines.push(toolStatusLine('●', runningStatusParts(call.name, args)))
-      if (call.progress && !call.progress.startsWith('__evot_spill_event__ ')) {
-        for (const text of toolResultLines(formatToolResultContent(call.progress), false, call.name, expanded)) {
-          lines.push({ id: genId('tool-progress'), kind: 'tool_result', text: `  ${text}` })
-        }
+      const progress = liveProgress(call, expanded)
+      lines.push(toolStatusLine('●', [...runningStatusParts(call.name, args), ...progress.parts], progress.hint))
+      for (const text of progress.rows) {
+        lines.push({ id: genId('tool-progress'), kind: 'tool_result', text: `  ${text}` })
       }
     } else {
       // The body is already above, so the outcome rows must not repeat it:
@@ -576,7 +579,6 @@ export function buildToolCard(call: UIToolCall, expanded?: boolean, _now = Date.
     return stampToolCard(lines, settledFailed ? 'error' : 'success')
   }
 
-  insertToolStatus(lines, toolStatusLine('●', runningStatusParts(call.name, args)))
   if (diff) {
     // A write card keeps the fixed gutter it streamed with, so swapping the
     // streamed body for the engine's diff does not re-indent anything.
@@ -586,14 +588,26 @@ export function buildToolCard(call: UIToolCall, expanded?: boolean, _now = Date.
     // preview diff so the card never blanks out mid-transition (pi behavior).
     appendWriteBody(lines, call)
   }
-  if (call.progress && !call.progress.startsWith('__evot_spill_event__ ')) {
-    const progressLines = toolResultLines(formatToolResultContent(call.progress), false, call.name, expanded)
-    for (const text of progressLines) {
-      lines.push({ id: genId('tool-progress'), kind: 'tool_result', text: `  ${text}` })
-    }
+  const progress = liveProgress(call, expanded)
+  insertToolStatus(lines, toolStatusLine('●', [...runningStatusParts(call.name, args), ...progress.parts], progress.hint))
+  for (const text of progress.rows) {
+    lines.push({ id: genId('tool-progress'), kind: 'tool_result', text: `  ${text}` })
   }
 
   return stampToolCard(lines, 'pending')
+}
+
+/**
+ * Streamed output of a running tool. Compact mode folds a multi-row body onto
+ * the status row (`● · running · 12 lines (ctrl+o)`), the same shape the
+ * settled card will take, so the card does not grow a row and then lose it.
+ * A single row shows inline; expanded mode shows everything.
+ */
+function liveProgress(call: UIToolCall, expanded?: boolean): { parts: string[]; hint: string; rows: string[] } {
+  if (!call.progress || call.progress.startsWith('__evot_spill_event__ ')) return { parts: [], hint: '', rows: [] }
+  const rows = toolResultLines(formatToolResultContent(call.progress), false, call.name, true)
+  if (expanded || rows.length <= 1) return { parts: [], hint: '', rows }
+  return { parts: [plural(rows.length, 'line')], hint: EXPAND_HINT, rows: [] }
 }
 
 /** Failed tool bodies stay folded; the status row carries a short reason. */
@@ -633,6 +647,9 @@ function runningStatusParts(name: string, args: Record<string, unknown>): string
   return ['running']
 }
 
+/** Tool latency below this is not shown on the status row. */
+export const SHOWN_DURATION_MS = 1000
+
 export function buildToolResult(
   name: string,
   args: Record<string, unknown>,
@@ -644,8 +661,12 @@ export function buildToolResult(
 ): OutputLine[] {
   const exitCode = name.toLowerCase() === 'bash' ? detailNumber(details, 'exit_code') : undefined
   const isError = status === 'error' || details.error === true || (exitCode !== undefined && exitCode !== 0)
-  const summary = toolResultSummary(name, args, result, details, isError)
-  const duration = durationMs !== undefined ? formatDuration(durationMs) : ''
+  // A task poll is summarized by the task's output, not by the protocol
+  // envelope around it (`Task ID: … Output:`), so its counts match the fold.
+  const summary = toolResultSummary(name, args, result && !isError && isTaskTool(name) ? taskOutputBody(result) : result, details, isError)
+  // Sub-second latency is noise on a card (`12ms` vs `30ms` for a read says
+  // nothing); only a wait worth noticing is shown.
+  const duration = durationMs !== undefined && durationMs >= SHOWN_DURATION_MS ? formatDuration(durationMs) : ''
   // Failed status: lead with "failed" so the line reads as an outcome, not a
   // size/duration metric ("74 B · 0ms" is meaningless for a missing path).
   const backgrounded = details.backgrounded === true
@@ -665,6 +686,29 @@ export function buildToolResult(
   // step, so it keeps the `●` running glyph — whether the task is detached or
   // still being waited on in the foreground.
   const stillRunning = taskStatus === 'running' || taskStatus === 'running_foreground'
+
+  // The result body. Compact mode strips the task envelope and drops the
+  // body of a backgrounded shell; expanded mode keeps everything for
+  // diagnostics. Compact edit/write cards also drop a successful body: the
+  // diff below is the real content, and `Updated path. Current content of the
+  // changed region(s): …` only repeats it.
+  const diff = args?.diff as string | undefined
+  const hasDiff = !isError && typeof diff === 'string' && diff.length > 0
+  const body = !result ? ''
+    : !expanded && !isError && isTaskTool(name) ? taskOutputBody(result)
+    : !expanded && !isError && (details.backgrounded === true || hasDiff) ? ''
+    : result
+  const formattedResult = formatToolResultContent(body)
+  const bodyRows = body.trim() ? toolResultLines(formattedResult, isError, name, true) : []
+  // A multi-row body folds in compact mode. The fold is reported on the
+  // status row, not on a row of its own: `✓ · exit 0 · 1.2s · 4 lines (ctrl+o)`
+  // says everything the old `… (+4 lines, ctrl+o to expand)` row did, one
+  // row shorter on every tool call. A status that already shows the same
+  // count (`read` says `3 lines`) only gets the hint. Shell output folds
+  // even at one row: a command's single line is often a long path or a
+  // wrapped error, and the status row already says how the command ended.
+  const shell = name.toLowerCase() === 'bash' || isTaskTool(name)
+  const folded = !expanded && (bodyRows.length > 1 || (shell && !isError && !taskFailed && bodyRows.length > 0))
   const statusParts = isError
     ? ['failed', summary, duration, result && !expanded ? errorReason(result, summary || 'failed') : ''].filter(Boolean)
     : taskParts.length > 0
@@ -672,48 +716,33 @@ export function buildToolResult(
         ? [...taskParts, errorReason(taskOutputBody(result), taskParts.join(' '))].filter(Boolean)
         : taskParts
       : [summary, duration].filter(Boolean)
+  // `read` says `3 lines` and `grep` says `2 matches` already; a status that
+  // counts its result in any unit skips the line count and keeps the hint.
+  const counted = /\b\d+ (line|match|hit|file|director|result|entr)/
+  const foldParts = folded && !statusParts.some(part => counted.test(part)) ? [plural(bodyRows.length, 'line')] : []
   const mark = isError || taskFailed ? '✗' : backgrounded || stillRunning ? '●' : '✓'
-  const lines: OutputLine[] = [toolStatusLine(mark, statusParts)]
+  const lines: OutputLine[] = [toolStatusLine(mark, [...statusParts, ...foldParts], folded ? EXPAND_HINT : '')]
 
   // Diff (for write/edit tools) — skip on failure; the attempt is already
   // summarized on the headline and the error body is what matters.
-  const diff = args?.diff as string | undefined
-  if (!isError && diff && typeof diff === 'string' && diff.length > 0) {
+  if (hasDiff && diff) {
     // A write's authoritative diff replaces a streamed body that was already
     // painted with a fixed gutter, so it has to keep that same width.
     const writeTool = name.toLowerCase() === 'write' || name.toLowerCase() === 'file_write'
     lines.push(...diffOutputLines(diff, writeTool ? WRITE_DIFF_GUTTER : 0))
   }
 
-  // Tool result content. Success and failure both fold to a single `(+N
-  // lines, ctrl+o to expand)` hint; a failure's status row names the reason.
-  if (result) {
-    const shell = name.toLowerCase() === 'bash' || isTaskTool(name)
-    // Only strip the known task envelope in compact mode. Expanded mode keeps
-    // the task id, output path and full result for diagnostics.
-    const body = !expanded && !isError && isTaskTool(name)
-      ? taskOutputBody(result)
-      : !expanded && !isError && details.backgrounded === true ? '' : result
-    const formattedResult = formatToolResultContent(body)
-    if (shell && !expanded && !isError && !taskFailed) {
-      const output = formattedResult.replace(/\r\n/g, '\n').replace(/\n+$/, '')
-      const rows = output.trim() ? output.split('\n') : []
-      if (rows.length > 0) lines.push(toolHintLine(`  … ${expandLinesHint(rows.length)}`))
-    } else if ((isError || taskFailed) && !expanded) {
-      // A single-line error is already on the status row; only a longer body
-      // needs the fold hint. Task envelopes without output have nothing to show.
-      const all = body.trim() ? toolResultLines(formattedResult, true, name, true) : []
-      if (all.length > 1) lines.push(toolHintLine(`  … ${expandLinesHint(all.length)}`))
-    } else {
-      const resultLines = toolResultLines(formattedResult, isError, name, expanded)
-      for (const rl of resultLines) {
-        lines.push({ id: genId('tool-res'), kind: isError ? 'error' : 'tool_result', text: `  ${rl}` })
-      }
-      // Collapse hint under any user-expanded multiline body (success or
-      // failure) — ctrl+o collapses back to the default view.
-      if (expanded && resultLines.length > 1) {
-        lines.push(toolHintLine(`  [2m${COLLAPSE_HINT}[0m`))
-      }
+  // Tool result content. A folded body is already accounted for on the
+  // status row. A single-row success is shown inline (nothing to fold); a
+  // single-row failure is not, because the status row names the reason.
+  if (!folded && bodyRows.length > 0 && !((isError || taskFailed) && !expanded)) {
+    for (const rl of bodyRows) {
+      lines.push({ id: genId('tool-res'), kind: isError ? 'error' : 'tool_result', text: `  ${rl}` })
+    }
+    // Collapse hint under any user-expanded multiline body (success or
+    // failure) — ctrl+o collapses back to the default view.
+    if (expanded && bodyRows.length > 1) {
+      lines.push(toolHintLine(`  [2m${COLLAPSE_HINT}[0m`))
     }
   }
 
@@ -723,7 +752,10 @@ export function buildToolResult(
 export function buildToolProgress(name: string, text: string, expanded?: boolean): OutputLine[] {
   const progressLines = text.replace(/\r\n/g, '\n').replace(/\n+$/, '').split('\n')
   const total = progressLines.length
-  const header = `${toolGlyph(name).icon} ${name}  · ${total} ${total === 1 ? 'line' : 'lines'}`
+  // Collapsed: no content preview. The header carries the line count and,
+  // for a multiline body, the expand hint; no extra row.
+  const count = `${total} ${total === 1 ? 'line' : 'lines'}`
+  const header = `${toolGlyph(name).icon} ${name}  · ${expanded || total <= 1 ? count : `${count} ${EXPAND_HINT}`}`
   const lines: OutputLine[] = [{ id: genId('tool'), kind: 'tool', text: header }]
   if (expanded) {
     // Expanded: full progress body + collapse hint.
@@ -735,11 +767,7 @@ export function buildToolProgress(name: string, text: string, expanded?: boolean
     }
     return lines
   }
-  // Collapsed: no content preview — the header already carries the line count,
-  // so a multiline body just adds a single expand hint (matching tool results).
-  if (total > 1) {
-    lines.push(toolHintLine(`  [2m... ${expandLinesHint(total)}[0m`))
-  } else {
+  if (total <= 1) {
     lines.push({ id: genId('tool-res'), kind: 'tool_result', text: `  ${progressLines[0] ?? ''}` })
   }
   return lines

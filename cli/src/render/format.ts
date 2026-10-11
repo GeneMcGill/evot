@@ -187,9 +187,14 @@ export function clipDisplayText(text: string, columns: number): string {
 /** Max visible columns for the first line of a collapsed bash command. */
 const BASH_CMD_FIRST_LINE_MAX = 120
 
-/** Shared expand/collapse copy for bash commands, tool results, and progress. */
+/**
+ * Shared expand/collapse copy. The expand hint is short because it rides on
+ * a row that already carries the line count (a tool status row, a progress
+ * header, a thinking summary); it never gets a row of its own.
+ */
+export const EXPAND_HINT = '(ctrl+o)'
 export function expandLinesHint(n: number): string {
-  return `(+${n} lines, ctrl+o to expand)`
+  return `+${n} lines ${EXPAND_HINT}`
 }
 
 export const COLLAPSE_HINT = '(ctrl+o to collapse)'

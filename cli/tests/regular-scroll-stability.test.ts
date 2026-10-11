@@ -142,8 +142,8 @@ test('write progress stays below the stable body and result metadata is not lost
   const running = buildToolCard({ ...base, progress: 'Flushing file', details: { diff: '@@ -1 +1 @@\n-old\n+new' } })
   expect(running.map(line => line.text).join('\n')).toContain('Flushing file')
   expect(running.findIndex(line => line.text.includes('Flushing file'))).toBeGreaterThan(running.findIndex(line => line.diffText !== undefined))
-  const done = buildToolCard({ ...base, status: 'done', durationMs: 12, result: 'Saved', details: { created: true, bytes: 7 } })
-  expect(done.map(line => line.text).join('\n')).toContain('created 7 B · 12ms')
+  const done = buildToolCard({ ...base, status: 'done', durationMs: 1200, result: 'Saved', details: { created: true, bytes: 7 } })
+  expect(done.map(line => line.text).join('\n')).toContain('created 7 B · 1.2s')
   // Without an engine diff the streamed body stays, still diff-shaped.
   expect(done.some(line => line.diffText?.includes('+one'))).toBe(true)
   expect(done.map(line => line.text).join('\n')).toContain('Saved')

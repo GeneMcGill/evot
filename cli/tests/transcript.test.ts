@@ -39,7 +39,7 @@ describe('transcript conversion', () => {
     }])
     const fold = (expanded?: boolean) =>
       messagesToOutputLines(messages, expanded).filter(line => line.kind === 'thinking').map(line => line.thinkingFold)
-    expect(fold()).toEqual(['middle'])
+    expect(fold()).toEqual(['collapsed'])
     expect(fold(true)).toEqual([undefined])
   })
 

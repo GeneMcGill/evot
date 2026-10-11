@@ -442,6 +442,53 @@ async fn openai_sse_tool_call() {
         .any(|e| matches!(e, StreamEvent::ToolCallEnd { .. })));
 }
 
+/// Observed from a gateway: the same call_id is announced under one `index`
+/// and its arguments arrive under the next one. That is one call, not two
+/// blocks sharing an id (the UI showed every card twice, the first empty).
+#[tokio::test]
+async fn openai_sse_same_call_id_under_new_index_stays_one_tool_call() {
+    let sse = openai_sse::body(vec![
+        openai_sse::tool_call_chunk(0, Some("call-a"), Some("read"), None),
+        openai_sse::tool_call_chunk(1, Some("call-a"), Some("read"), Some(r#"{"path":"a.md"}"#)),
+        openai_sse::tool_call_chunk(2, Some("call-b"), Some("read"), None),
+        openai_sse::tool_call_chunk(3, Some("call-b"), Some("read"), Some(r#"{"path":"b.md"}"#)),
+        openai_sse::finish_with_usage("tool_calls", 40, 8),
+        openai_sse::done(),
+    ]);
+
+    let (msg, events) = run_provider_sse(&OpenAiCompatProvider, openai_config(), &sse, 200)
+        .await
+        .unwrap();
+
+    let content = match msg {
+        Message::Assistant { content, .. } => content,
+        _ => panic!("Expected Assistant message"),
+    };
+    assert_eq!(content.len(), 2, "one block per call id: {content:?}");
+    assert!(matches!(
+        &content[0],
+        Content::ToolCall { id, arguments, .. } if id == "call-a" && arguments["path"] == "a.md"
+    ));
+    assert!(matches!(
+        &content[1],
+        Content::ToolCall { id, arguments, .. } if id == "call-b" && arguments["path"] == "b.md"
+    ));
+
+    let ends: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            StreamEvent::ToolCallEnd {
+                content_index, id, ..
+            } => Some((*content_index, id.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ends, vec![
+        (0, "call-a".to_string()),
+        (1, "call-b".to_string())
+    ]);
+}
+
 #[tokio::test]
 async fn openai_sse_interleaved_parallel_tool_calls_keep_separate_state() {
     let sse = openai_sse::body(vec![

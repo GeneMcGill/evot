@@ -27,7 +27,8 @@ test('compact task cards hide output and count only output, not the protocol env
   expect(compact.map(row => row.text).join('\n')).not.toContain('first')
   expect(compact.map(row => row.text).join('\n')).not.toContain('second')
   expect(compact.map(row => row.text).join('\n')).not.toContain('Output file:')
-  expect(compact.map(row => row.text).join('\n')).toContain('+2 lines')
+  expect(compact.map(row => row.text).join('\n')).toContain('2 lines')
+  expect(compact.map(row => row.text).join('\n')).toContain('(ctrl+o)')
   expect(buildToolCard(call, true).map(row => row.text).join('\n')).toContain('Output file:')
 })
 
@@ -37,7 +38,10 @@ test('bash hides all successful output, including a single line, until expanded'
     const compact = buildToolCard(call).map(row => stripAnsi(row.text)).join('\n')
     expect(compact).not.toContain('one')
     expect(compact).not.toContain('five')
-    expect(compact).toContain(result === 'one' ? '+1 lines' : '+5 lines')
+    expect(compact).toContain(result === 'one' ? '1 line' : '5 lines')
+    // The fold rides on the status row; the card has no hint row of its own.
+    expect(compact).toContain('(ctrl+o)')
+    expect(buildToolCard(call)).toHaveLength(2)
     expect(buildToolCard(call, true).map(row => row.text).join('\n')).toContain('one')
   }
 })
@@ -47,7 +51,7 @@ test('failed background tasks name the error on the status row and fold the body
   const status = card.find(row => row.text.startsWith('  ✗'))
   expect(status?.text).toContain('compilation failed')
   expect(card.some(row => row.kind === 'error')).toBe(false)
-  expect(card.map(row => row.text).join('\n')).toContain('+2 lines')
+  expect(card.map(row => row.text).join('\n')).toContain('2 lines (ctrl+o)')
   expect(card.map(row => row.text).join('\n')).not.toContain('second line')
 })
 

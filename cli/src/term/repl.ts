@@ -169,6 +169,7 @@ import { ResourceScope } from './resource-scope.js'
 import { RenderWakeup } from './render-wakeup.js'
 import { errorText } from '../render/format.js'
 import { buildRunFooterLine } from '../render/run-footer.js'
+import { RunThinking } from '../render/run-thinking.js'
 import { TaskSession } from '../task/session.js'
 import { ensureFeishuDelivery } from '../channels/feishu/setup.js'
 import { waitForSetup } from '../channels/setup-wait.js'
@@ -290,6 +291,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
   const runOwnership = new RunOwnership()
   let runStartedAt: number | null = null
   let runTurnCount = 0
+  const runThinking = new RunThinking()
   const beginRun = (): number => runOwnership.begin()
   const ownsRun = (generation: number): boolean => runOwnership.owns(generation)
   const revokeRun = (): void => {
@@ -1650,6 +1652,9 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
     // including the committed tail's kind as layout context. This keeps
     // thinking/text/tool positions, margins, and prefixes byte-identical through
     // completion, so committing the message never changes any rendered row.
+    // The one exception is a reasoning block that is still streaming when the
+    // run ends: its tail window collapses to a summary row at commit, which the
+    // renderer absorbs as an in-viewport shrink above the footer.
     const blocks = buildOutputBlocks(assistantMessageToOutputLines(content, expanded, {
       streaming,
     }), {
@@ -1885,7 +1890,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
 
   function commitRunFooter() {
     if (runStartedAt === null) return
-    const line = buildRunFooterLine(runStartedAt, Date.now(), runTurnCount)
+    const line = buildRunFooterLine(runStartedAt, Date.now(), runTurnCount, runThinking.finish())
     runStartedAt = null
     if (line) commitLines([line])
   }
@@ -2322,6 +2327,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
     const generation = beginRun()
     runStartedAt = Date.now()
     runTurnCount = 0
+    runThinking.reset()
     liveContentMaxHeight = 0
     isLoading = true
     spinnerState = createSpinnerState()
@@ -2381,6 +2387,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
           sessionHook.runFailed(event.run_id, String(event.payload?.message ?? ''))
         }
 
+        runThinking.observe(event)
         const update = reduceRunEvent(streamMachine!, event, {
           termRows: renderer.termRows,
           cloudProvider: activeProviderIsCloud(),
@@ -3927,6 +3934,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
     const generation = beginRun()
     runStartedAt = Date.now()
     runTurnCount = 0
+    runThinking.reset()
     liveContentMaxHeight = 0
     isLoading = true
     spinnerState = createSpinnerState()
@@ -3953,6 +3961,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
         if (!streamMachine) break
         if (isHostToolEvent(event)) throw new Error('Readonly log run requested a host tool')
 
+        runThinking.observe(event)
         const update = reduceRunEvent(streamMachine, event, {
           termRows: renderer.termRows,
           cloudProvider: activeProviderIsCloud(),

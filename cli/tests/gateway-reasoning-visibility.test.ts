@@ -6,9 +6,9 @@ import type { UIAssistantBlock } from '../src/term/app/types.js'
 import { buildOutputBlocks } from '../src/term/viewmodel/output.js'
 import { blocksToLines } from '../src/term/viewmodel/types.js'
 
-function render(content: UIAssistantBlock[], streaming: boolean): string {
+function render(content: UIAssistantBlock[], streaming: boolean, expanded = false): string {
   return stripAnsi(blocksToLines(buildOutputBlocks(
-    assistantMessageToOutputLines(content, false, { streaming }),
+    assistantMessageToOutputLines(content, expanded, { streaming }),
     { columns: 80 },
   )).join('\n'))
 }
@@ -49,19 +49,25 @@ describe('gateway reasoning visibility', () => {
     const live = render(updated, true)
     expect(live).toContain('检查协议转换是否丢失摘要。')
     expect(live.indexOf('read')).toBeLessThan(live.indexOf('✻'))
-    expect(render(updated, false)).toBe(live)
+    // Not streaming = the block is finished, and finished reasoning leaves
+    // the compact transcript; ctrl+o still has it.
+    expect(render(updated, false)).not.toContain('✻')
+    expect(render(updated, false, true)).toContain('检查协议转换是否丢失摘要。')
   })
 
-  test('the fifth turn summary from the reported session survives completion', () => {
+  test('the fifth turn summary from the reported session streams in full and survives completion behind ctrl+o', () => {
     const text = '**Analyzing git diff and streaming behavior**\n\n**Detailing theme and interface redesign changes**\n\n'
     const streamed = appendAssistantDelta([], {
       content_index: 0, content_type: 'thinking', delta: text,
     })
     const completed = completedAssistantContent([{ type: 'thinking', text }], streamed)
-    for (const [content, streaming] of [[streamed, true], [completed, false]] as const) {
-      const visible = render(content, streaming)
+    for (const visible of [render(streamed, true), render(completed, false, true)]) {
       expect(visible).toContain('Analyzing git diff and streaming behavior')
       expect(visible).toContain('Detailing theme and interface redesign changes')
     }
+    // The compact transcript drops finished reasoning entirely.
+    const collapsed = render(completed, false)
+    expect(collapsed).not.toContain('✻')
+    expect(collapsed).not.toContain('Analyzing git diff')
   })
 })

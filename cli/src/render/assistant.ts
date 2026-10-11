@@ -58,13 +58,18 @@ export function assistantContentToOutputLines(
   options: { streaming?: boolean } = {},
 ): OutputLine[] {
   const ordered = [...content].sort((a, b) => a.contentIndex - b.contentIndex)
-  // Only the block still receiving deltas is streaming. Earlier blocks are
-  // complete, so they render exactly as they will once committed — a finished
-  // reasoning block already shows its committed head-and-tail fold while the
-  // model is still typing after it; only the live block scrolls as a tail
-  // window.
+  // Only the block still receiving deltas is streaming. Finished reasoning
+  // is hidden in compact output. Timing belongs only in the final run footer,
+  // not in a separate live status row or a committed thinking card.
+  const streaming = options.streaming ?? false
+  // Empty/whitespace deltas do not finish the visible thinking window.
+  const last = ordered.findLastIndex(block => block.type === 'tool_call' || block.text.trim().length > 0)
   return ordered.flatMap((block, index) =>
-    renderBlockCached(block, expandedTools, (options.streaming ?? false) && index === ordered.length - 1),
+    renderBlockCached(
+      block,
+      expandedTools,
+      streaming && index === last,
+    ),
   )
 }
 
