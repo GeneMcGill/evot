@@ -38,6 +38,8 @@ pub struct TurnBuildRequest {
     pub host_tools: Option<HostTools>,
     /// Dump/inspection callers must not drain pending process results.
     pub consume_process_notifications: bool,
+    /// Selection replaced by the latest model switch, if any.
+    pub previous_llm: Option<LlmConfig>,
 }
 
 pub struct TurnAssembler {
@@ -136,6 +138,7 @@ impl TurnAssembler {
             mut input,
             host_tools,
             consume_process_notifications,
+            previous_llm,
         } = request;
         let llm = llm.clone();
         if llm.provider.is_empty() {
@@ -207,6 +210,10 @@ impl TurnAssembler {
                 .join("\n\n");
         }
         let (prior_messages, compaction_state, transcript_seq) = session.context_snapshot().await;
+        let compaction_llm = previous_llm.filter(|previous| {
+            previous.model != llm.model
+                && last_assistant_model(&prior_messages) == Some(previous.model.as_str())
+        });
         // Replay normalization belongs at the engine LLM boundary, not here.
         if consume_process_notifications {
             if let Some(process_manager) = &process_manager {
@@ -244,6 +251,7 @@ impl TurnAssembler {
                 process_manager,
                 prompt_cache_key: Some(session_id.to_string()),
                 provider_override: self.provider_override.read().clone(),
+                compaction_llm,
                 compaction_state,
                 // Re-resolved every run: the catalog decides whether pruning
                 // is on, and it can change while a session is open.
@@ -261,4 +269,14 @@ impl TurnAssembler {
             transcript_seq,
         })
     }
+}
+
+/// Model that produced the most recent assistant message in the history.
+fn last_assistant_model(messages: &[evot_engine::AgentMessage]) -> Option<&str> {
+    messages.iter().rev().find_map(|message| match message {
+        evot_engine::AgentMessage::Llm(evot_engine::Message::Assistant { model, .. }) => {
+            Some(model.as_str())
+        }
+        _ => None,
+    })
 }

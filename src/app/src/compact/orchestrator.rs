@@ -61,10 +61,10 @@ pub struct CompactSummarizer {
     pub llm: LlmConfig,
     /// Maximum summary output. Split-turn prefix summaries use half this value.
     pub reserve_tokens: u32,
-    /// Maximum wall-clock time for one summary stage (remote or LLM). Expiry
-    /// uses the deterministic fallback; explicit user cancellation still
-    /// cancels the entire compaction without writing a marker.
-    pub timeout: std::time::Duration,
+    /// Optional wall-clock bound per summary stage for explicit callers.
+    /// Interactive compaction has no deadline: it waits for completion unless
+    /// the user cancels. Explicit expiry may use the deterministic fallback.
+    pub timeout: Option<std::time::Duration>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -268,7 +268,7 @@ pub async fn compact_session_with_status(
         &config,
         summary::SummaryOptions {
             llm_policy: LlmPolicy::PreferLlm,
-            timeout: request.summarizer.as_ref().map(|s| s.timeout),
+            timeout: request.summarizer.as_ref().and_then(|s| s.timeout),
             observer: observer.clone(),
             cancel: cancel.clone(),
         },

@@ -22,6 +22,23 @@ use super::types::*;
 use crate::context::tokens::total_tokens;
 use crate::types::AgentMessage;
 
+/// Where in the run a compaction check happens. Run end may summarize earlier
+/// (`post_turn_trigger_threshold`) because nobody is waiting on the reply.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Checkpoint {
+    MidRun,
+    RunEnd,
+}
+
+impl Checkpoint {
+    fn summary_threshold(self, config: &CompactionConfig) -> usize {
+        match self {
+            Self::MidRun => config.trigger_threshold(),
+            Self::RunEnd => config.post_turn_trigger_threshold(),
+        }
+    }
+}
+
 /// Threshold-compaction suppression key (droid-style): once a threshold
 /// compaction failed to bring usage back under the limit, further threshold
 /// compactions for the same model/threshold are skipped until usage recovers.
@@ -227,6 +244,7 @@ impl CompactionController {
             usage,
             current_model,
             SummaryContexts::same(summarizer_ctx),
+            Checkpoint::MidRun,
             cancel,
         )
         .await
@@ -240,6 +258,7 @@ impl CompactionController {
         usage: &UsageSnapshot,
         current_model: &ModelId,
         contexts: SummaryContexts<'_>,
+        checkpoint: Checkpoint,
         cancel: CancellationToken,
     ) -> CompactionResponse {
         let trigger_input = TriggerInput {
@@ -257,6 +276,18 @@ impl CompactionController {
                 // this context and is not a size.
                 if usage.model == *current_model {
                     let context_tokens = trigger::calculate_context_tokens(usage);
+                    if context_tokens >= checkpoint.summary_threshold(&self.config) {
+                        return self
+                            .threshold_compact(
+                                messages,
+                                context_tokens,
+                                current_model,
+                                contexts,
+                                checkpoint,
+                                cancel,
+                            )
+                            .await;
+                    }
                     return self.prune_mid_run(messages, context_tokens, cancel).await;
                 }
                 CompactionResponse::skip()
@@ -391,8 +422,15 @@ impl CompactionController {
                 // With a judge, `run_compaction` prunes first and only
                 // summarises if the lossless cut is not enough: the prefix is
                 // rebuilt either way, so the prune costs nothing extra here.
-                self.threshold_compact(messages, context_tokens, current_model, contexts, cancel)
-                    .await
+                self.threshold_compact(
+                    messages,
+                    context_tokens,
+                    current_model,
+                    contexts,
+                    checkpoint,
+                    cancel,
+                )
+                .await
             }
         }
     }
@@ -411,6 +449,7 @@ impl CompactionController {
             estimated_tokens,
             current_model,
             SummaryContexts::same(summarizer_ctx),
+            Checkpoint::MidRun,
             cancel,
         )
         .await
@@ -423,17 +462,25 @@ impl CompactionController {
         estimated_tokens: usize,
         current_model: &ModelId,
         contexts: SummaryContexts<'_>,
+        checkpoint: Checkpoint,
         cancel: CancellationToken,
     ) -> CompactionResponse {
         if self.config.context_window == 0 {
             return CompactionResponse::skip();
         }
-        if estimated_tokens < self.config.trigger_threshold() {
+        if estimated_tokens < checkpoint.summary_threshold(&self.config) {
             self.clear_suppression_for(current_model);
             return self.prune_mid_run(messages, estimated_tokens, cancel).await;
         }
-        self.threshold_compact(messages, estimated_tokens, current_model, contexts, cancel)
-            .await
+        self.threshold_compact(
+            messages,
+            estimated_tokens,
+            current_model,
+            contexts,
+            checkpoint,
+            cancel,
+        )
+        .await
     }
 
     /// The prune branch between responses: nothing below its threshold or
@@ -571,11 +618,12 @@ impl CompactionController {
         context_tokens: usize,
         current_model: &ModelId,
         contexts: SummaryContexts<'_>,
+        checkpoint: Checkpoint,
         cancel: CancellationToken,
     ) -> CompactionResponse {
         let key = ThresholdKey {
             model: current_model.clone(),
-            threshold: self.config.trigger_threshold(),
+            threshold: checkpoint.summary_threshold(&self.config),
         };
         if self.threshold_suppression.as_ref() == Some(&key) {
             tracing::debug!(

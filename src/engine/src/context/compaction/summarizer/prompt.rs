@@ -11,84 +11,44 @@ Distinguish user requests from automated <task-notification> events, even when \
 both use the user role. Preserve background-task IDs, descriptions, status, and \
 output locations alongside pending work. Preserve the user's language preferences.";
 
-/// Initial summarization prompt (no previous summary).
-pub const INITIAL_PROMPT: &str = "\
-The messages above are a conversation to summarize. Create a structured context \
-checkpoint summary that another LLM will use to continue the work.\n\n\
+/// Shared output format. Deliberately short: summary generation is the slow
+/// phase of compaction and output length is the dominant cost, so the prompt
+/// asks for a handoff, not a transcript.
+const FORMAT: &str = "\
 Wrap your final summary in <summary> tags. Use this EXACT format:\n\n\
 <summary>\n\
 ## Goal\n\
-[What is the user trying to accomplish? Can be multiple items if the session covers different tasks.]\n\n\
-## Chronological Play-by-Play\n\
-- Capture every significant turn in order: user messages, assistant replies, and tool invocations.\n\
-- Use arrow notation to show flow, e.g. \"User requests refactor -> Assistant edits files A,B,C -> User asks for clarification\".\n\
-- Paraphrase for brevity but preserve intent, technical detail, and outcomes.\n\n\
+[What the user is trying to accomplish; one line per distinct task]\n\n\
 ## Constraints & Preferences\n\
-- [Any constraints, preferences, or requirements mentioned by user]\n\
-- [Or \"(none)\" if none were mentioned]\n\n\
-## Key Technical Work\n\
-- [Key technical work done thus far]\n\n\
-## Questions and Clarifications\n\
-- [Questions the assistant asked, and clarifications the user provided]\n\
-- [Or \"(none)\" if none were exchanged]\n\n\
+- [User-stated constraints, preferences, language; or \"(none)\"]\n\n\
+## Progress\n\
+- [Completed work and key decisions with brief rationale; one line each]\n\n\
 ## Files and Code Sections\n\
-- [Important updated/created files with full paths and brief descriptions of changes]\n\
-- [Or \"(none)\" if not applicable]\n\n\
-## Error Resolution\n\
-- [Errors encountered and how they were or are to be resolved]\n\
-- [Or \"(none)\" if no errors were encountered]\n\n\
-## Key Decisions\n\
-- **[Decision]**: [Brief rationale]\n\n\
+- [Full path: what changed or why it matters; or \"(none)\"]\n\n\
+## Open Issues\n\
+- [Unresolved errors, blockers, pending background tasks with IDs; or \"(none)\"]\n\n\
 ## Current Work\n\
-[Details about the current task. Include the user's latest message and any context needed to continue the work.]\n\n\
+[The latest user request and the state needed to continue it]\n\n\
 ## Next Steps\n\
-1. [Ordered list of what should happen next]\n\n\
-## Critical Context\n\
-- [Any data, examples, or references needed to continue]\n\
-- [Or \"(none)\" if not applicable]\n\
+1. [Ordered, concrete]\n\
 </summary>\n\n\
 Guidelines:\n\
-- Prioritize technical details over conversational elements\n\
-- Maintain chronological order of events\n\
-- Highlight unresolved issues and next steps clearly\n\
-- Preserve exact file paths, function names, and error messages\n\
-- Ensure the summary can stand alone as a reference document";
+- Be concise: target under 600 words. Never narrate turn by turn.\n\
+- Keep exact file paths, identifiers, commands, and error messages; drop tool output otherwise.\n\
+- Omit anything that no longer affects the remaining work.\n\
+- The summary must stand alone for an LLM resuming the task.";
+
+/// Initial summarization prompt (no previous summary).
+pub const INITIAL_PROMPT: &str = "\
+The messages above are a conversation to summarize. Create a context checkpoint \
+summary that another LLM will use to continue the work.\n\n";
 
 /// Update prompt (merge new messages into existing summary).
 pub const UPDATE_PROMPT: &str = "\
-A previous summary exists. New messages were sent since that summary. You must \
-update the summary to cover these new messages.\n\n\
-Wrap your final summary in <summary> tags. Use this EXACT format:\n\n\
-<summary>\n\
-## Goal\n\
-[Preserve existing goals, add new ones if the task expanded]\n\n\
-## Chronological Play-by-Play\n\
-- Preserve existing play-by-play and append new turns in order\n\n\
-## Constraints & Preferences\n\
-- [Preserve existing, add new ones discovered]\n\n\
-## Key Technical Work\n\
-- [Include previously done AND newly completed work]\n\n\
-## Questions and Clarifications\n\
-- [Preserve existing, add new questions and clarifications]\n\n\
-## Files and Code Sections\n\
-- [Preserve existing, add newly updated/created files]\n\n\
-## Error Resolution\n\
-- [Preserve existing, add new errors and resolutions; remove resolved if no longer relevant]\n\n\
-## Key Decisions\n\
-- **[Decision]**: [Brief rationale] (preserve all previous, add new)\n\n\
-## Current Work\n\
-[Update with the latest task. Include the user's latest message and context needed to continue.]\n\n\
-## Next Steps\n\
-1. [Update based on current state]\n\n\
-## Critical Context\n\
-- [Preserve important context, add new if needed]\n\
-</summary>\n\n\
-Guidelines:\n\
-- Prioritize technical details over conversational elements\n\
-- Maintain chronological order of events\n\
-- Preserve exact file paths, function names, and error messages\n\
-- If something is no longer relevant, you may remove it\n\
-- Ensure the summary can stand alone as a reference document";
+A previous summary exists. New messages were sent since that summary. Rewrite the \
+summary so it covers both, merging rather than appending: keep goals, constraints, \
+and decisions that still matter, fold completed items into Progress, and drop what \
+is obsolete. The result must not grow with each update.\n\n";
 
 /// Turn prefix summarization prompt (for split turns).
 pub const TURN_PREFIX_PROMPT: &str = "\
@@ -137,7 +97,7 @@ fn with_custom_instructions(mut prompt: String, instructions: Option<&str>) -> S
 /// Build the user message for initial summarization.
 pub fn format_initial(conversation: &str, custom_instructions: Option<&str>) -> String {
     with_custom_instructions(
-        format!("<conversation>\n{conversation}\n</conversation>\n\n{INITIAL_PROMPT}"),
+        format!("<conversation>\n{conversation}\n</conversation>\n\n{INITIAL_PROMPT}{FORMAT}"),
         custom_instructions,
     )
 }
@@ -160,7 +120,7 @@ pub fn format_update(
         format!(
             "<conversation>\n{conversation}\n</conversation>\n\n\
              <previous-summary>\n{previous_summary}\n</previous-summary>\n\n\
-             {UPDATE_PROMPT}{length_guidance}"
+             {UPDATE_PROMPT}{FORMAT}{length_guidance}"
         ),
         custom_instructions,
     )

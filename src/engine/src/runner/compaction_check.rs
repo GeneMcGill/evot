@@ -6,6 +6,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::config::AgentLoopConfig;
 use super::event_sink::EventSink;
+use crate::context::compaction::Checkpoint;
 use crate::context::tokens::total_tokens;
 use crate::context::window::usage_is_plausible;
 use crate::context::AfterResponseAction;
@@ -145,15 +146,29 @@ pub(super) async fn check_compaction(
             .to_string(),
         model: config.model.clone(),
     };
+    // A dedicated summary model (e.g. the model that produced this history
+    // before a switch) is tried first; when it is unavailable the active model
+    // takes over unless an explicit fallback was configured.
+    let checkpoint = match phase {
+        CompactionCheckPhase::RunEnd => Checkpoint::RunEnd,
+        CompactionCheckPhase::BeforePrompt => Checkpoint::MidRun,
+    };
     let remote_ctx = request_shape.summarizer_context(config);
     let llm_ctx = config.compaction_context.as_ref().unwrap_or(&remote_ctx);
-    let contexts = SummaryContexts::separate(
-        Some(&remote_ctx),
-        Some(llm_ctx),
-        config.compaction_fallback_context.as_ref(),
-    );
+    let fallback_ctx = config
+        .compaction_fallback_context
+        .as_ref()
+        .or(config.compaction_context.as_ref().map(|_| &remote_ctx));
+    let contexts = SummaryContexts::separate(Some(&remote_ctx), Some(llm_ctx), fallback_ctx);
     let response = ctrl
-        .after_response_with_contexts(messages, &usage, &current_model, contexts, cancel.clone())
+        .after_response_with_contexts(
+            messages,
+            &usage,
+            &current_model,
+            contexts,
+            checkpoint,
+            cancel.clone(),
+        )
         .await;
 
     // Error/all-zero responses do not provide a direct context size. Mirror
@@ -191,6 +206,7 @@ pub(super) async fn check_compaction(
             estimated_tokens,
             &current_model,
             contexts,
+            checkpoint,
             cancel,
         )
         .await

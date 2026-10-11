@@ -9,6 +9,7 @@ export interface NativeSubmitOutcome {
 }
 export interface NativeCompaction {
   readonly phase: unknown
+  readonly activity?: unknown
   result(): Promise<string>
   abort(): void
 }

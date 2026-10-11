@@ -35,13 +35,22 @@ impl SelectionReload {
 /// admitted run or fork does not follow subsequent live changes.
 pub struct ModelSelection {
     llm: RwLock<LlmConfig>,
+    /// The selection replaced by the latest provider/model switch. Compaction
+    /// uses it to summarize history the previous model produced.
+    previous: RwLock<Option<LlmConfig>>,
 }
 
 impl ModelSelection {
     pub fn new(llm: LlmConfig) -> Self {
         Self {
             llm: RwLock::new(llm),
+            previous: RwLock::new(None),
         }
+    }
+
+    /// The model selected before the current one, if they differ.
+    pub fn previous_llm(&self) -> Option<LlmConfig> {
+        self.previous.read().clone()
     }
 
     pub fn snapshot(&self) -> LlmConfig {
@@ -50,7 +59,15 @@ impl ModelSelection {
 
     /// Replace with an already resolved configuration without inheriting effort.
     pub fn replace(&self, llm: LlmConfig) {
-        *self.llm.write() = llm;
+        let mut current = self.llm.write();
+        self.remember_switch(&current, &llm);
+        *current = llm;
+    }
+
+    fn remember_switch(&self, current: &LlmConfig, next: &LlmConfig) {
+        if current.provider != next.provider || current.model != next.model {
+            *self.previous.write() = Some(current.clone());
+        }
     }
 
     /// Explicit override, preserving the existing Agent setter's semantics.
@@ -121,6 +138,7 @@ impl ModelSelection {
                 .model_config
                 .effective_thinking_level(current.thinking_level);
         }
+        self.remember_switch(&current, &next);
         *current = next;
         Ok(())
     }

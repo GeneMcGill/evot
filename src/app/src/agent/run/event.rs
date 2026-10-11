@@ -185,6 +185,8 @@ pub enum RunEventPayload {
     },
     ContextCompactionPhase {
         phase: evot_engine::CompactionPhase,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        activity: Option<evot_engine::context::compaction::types::CompactionActivity>,
     },
     ContextCompactionCompleted {
         reason: CompactReason,

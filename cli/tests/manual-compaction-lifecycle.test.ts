@@ -30,6 +30,24 @@ test('phase/presentation and result failures abort and release ownership', async
   }
 })
 
+test('manual summary activity is live, optional for old tasks, and cleared after completion', async () => {
+  const owner = new ManualCompaction()
+  const old = fixture()
+  await owner.run(() => old.task, () => expect(owner.activity).toBeNull(), async () => {})
+  let activity: 'waiting' | 'generating' = 'waiting'
+  const task: ManualCompactionTask = {
+    phase: 'local', get activity() { return activity }, abort() {},
+    result: async () => {
+      expect(owner.activity).toBe('waiting')
+      activity = 'generating'
+      expect(owner.activity).toBe('generating')
+      return { status: 'nothing_to_compact' }
+    },
+  }
+  await owner.run(() => task, () => {}, async () => {})
+  expect(owner.activity).toBeNull()
+})
+
 test('ownership spans asynchronous rebuild and rejects overlapping starts', async () => {
   const owner = new ManualCompaction()
   const f = fixture()

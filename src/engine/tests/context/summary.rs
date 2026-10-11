@@ -265,3 +265,56 @@ async fn repeated_context_overflow_retries_with_abbreviated_tools() {
     assert!(!abbreviated.contains("large private reasoning"));
     assert!(abbreviated.contains("details omitted"));
 }
+
+#[tokio::test]
+async fn unavailable_primary_model_hands_summary_to_fallback_model() {
+    // A previous model that is gone (revoked key, removed deployment) must not
+    // block compaction: the active model takes over with the same input.
+    let primary = Arc::new(RecordingProvider::new(vec![Reply::error(
+        "401 Unauthorized: invalid api key",
+    )]));
+    let primary_calls = primary.captured();
+    let fallback = Arc::new(RecordingProvider::new(vec![Reply::text(
+        "ACTIVE MODEL SUMMARY",
+    )]));
+    let fallback_calls = fallback.captured();
+    let primary_ctx = context("previous", primary);
+    let fallback_ctx = context("active", fallback);
+
+    let result = run(
+        &[user("remember the architecture")],
+        SummaryContexts::separate(None, Some(&primary_ctx), Some(&fallback_ctx)),
+    )
+    .await;
+
+    assert_eq!(result.text, "ACTIVE MODEL SUMMARY");
+    assert!(
+        !result.used_fallback,
+        "an LLM summary is not the emergency fallback"
+    );
+    assert_eq!(primary_calls.lock().len(), 1);
+    assert_eq!(fallback_calls.lock().len(), 1);
+}
+
+#[tokio::test]
+async fn fallback_overflow_still_retries_abbreviated_on_fallback_model() {
+    let primary = Arc::new(RecordingProvider::new(vec![Reply::error(
+        "503 unavailable",
+    )]));
+    let fallback = Arc::new(RecordingProvider::new(vec![
+        Reply::error("context length exceeded"),
+        Reply::text("ABBREVIATED ON ACTIVE"),
+    ]));
+    let fallback_calls = fallback.captured();
+    let primary_ctx = context("previous", primary);
+    let fallback_ctx = context("active", fallback);
+
+    let result = run(
+        &tool_turn(),
+        SummaryContexts::separate(None, Some(&primary_ctx), Some(&fallback_ctx)),
+    )
+    .await;
+
+    assert!(result.text.starts_with("ABBREVIATED ON ACTIVE"));
+    assert_eq!(fallback_calls.lock().len(), 2);
+}

@@ -85,9 +85,11 @@ async fn manual_compact_uses_remote_responses_and_persists_blob() -> TestResult 
 
     let phases = Arc::new(Mutex::new(Vec::new()));
     let observed = Arc::clone(&phases);
-    let observer: evot::compact::orchestrator::ManualCompactionObserver = Arc::new(move |phase| {
-        if let Ok(mut phases) = observed.lock() {
-            phases.push(phase);
+    let observer: evot::compact::orchestrator::ManualCompactionObserver = Arc::new(move |update| {
+        if update.activity.is_none() {
+            if let Ok(mut phases) = observed.lock() {
+                phases.push(update.phase);
+            }
         }
     });
     let outcome = agent

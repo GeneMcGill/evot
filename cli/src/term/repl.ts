@@ -13,7 +13,7 @@ import {
 import { TerminalInputBuffer } from './input/buffer.js'
 import { schemeFromRgbColor } from './terminal-colors.js'
 import { getTheme, setDetectedThemeScheme } from '../render/theme/index.js'
-import { createSpinnerState, advanceSpinner, formatSpinnerLine, setSpinnerPhase, spinnerStatsFromLastUsage } from './spinner.js'
+import { compactionToolName, createSpinnerState, advanceSpinner, formatSpinnerLine, setSpinnerPhase, spinnerStatsFromLastUsage } from './spinner.js'
 import { carryModelEfforts, createModelWindow, createResumeWindow } from './app/selector-windows.js'
 import { buildShellFrame } from './viewmodel/shell.js'
 import { promptFromSnapshot } from './viewmodel/prompt-snapshot.js'
@@ -258,6 +258,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
   let backgroundWaitSpinner = setSpinnerPhase(createSpinnerState(), 'awaiting_background')
   let backgroundWaitSince: number | null = null
   let manualCompactionPhase: string | null = null
+  let manualCompactionActivity: string | null = null
   let editor: EditorState = createEditorState()
   // Undo stack lives outside EditorState so snapshots stay plain data. Cleared
   // on submit/clear so a previous prompt cannot be restored into a new one.
@@ -1758,13 +1759,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
       // Usage arrives only when the provider completes this call. During an
       // active call, show only its live output estimate; retaining the previous
       // call here would present stale cache/input values as if they were current.
-      const compactToolName = manualCompactionPhase === 'remote'
-        ? 'compact_remote'
-        : manualCompactionPhase === 'local_fallback'
-          ? 'compact_local_fallback'
-          : manualCompactionPhase === 'local'
-            ? 'compact_local'
-            : 'compact'
+      const compactToolName = compactionToolName(manualCompactionPhase, manualCompactionActivity)
       const spinnerForDisplay = manualCompaction.active
         ? { ...spinnerState, toolName: compactToolName }
         : spinnerState
@@ -1980,7 +1975,10 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
     titleFrame = 0
     spinnerTimer = setInterval(() => {
       spinnerState = advanceSpinner(spinnerState)
-      if (manualCompaction.active) manualCompactionPhase = manualCompaction.phase
+      if (manualCompaction.active) {
+        manualCompactionPhase = manualCompaction.phase
+        manualCompactionActivity = manualCompaction.activity
+      }
       if (streamMachine) {
         streamMachine = { ...streamMachine, spinnerState }
       }
@@ -2159,6 +2157,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
         () => agent.compact(targetSession, customInstructions || undefined),
         () => {
           manualCompactionPhase = manualCompaction.phase
+          manualCompactionActivity = manualCompaction.activity
           renderer.requestRender()
         },
         async outcome => {
@@ -2175,6 +2174,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
       commitSystem('sys-compact-err', `Compact failed: ${errorText(err)}`, 'error')
     } finally {
       manualCompactionPhase = null
+      manualCompactionActivity = null
       isLoading = false
       stopSpinner()
       renderer.requestRender()

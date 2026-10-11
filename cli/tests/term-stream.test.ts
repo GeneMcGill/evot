@@ -35,6 +35,25 @@ describe('term stream machine', () => {
     expect(complete.state.spinnerState.phase).toBe('preparing')
   })
 
+  test('summary activity changes the spinner without exposing summary deltas', () => {
+    let state = createStreamMachineState(createInitialState('model', '/tmp'), createSpinnerState())
+    for (const [activity, toolName] of [['waiting', 'compact_waiting'], ['generating', 'compact_generating']] as const) {
+      const update = reduceRunEvent(state, {
+        kind: 'context_compaction_phase', payload: { phase: 'local', activity },
+      }, { termRows: 24 })
+      state = update.state
+      expect(state.spinnerState.toolName).toBe(toolName)
+      expect(state.spinnerState.tokenCount).toBe(0)
+      expect(update.commitLines).toEqual([])
+      expect(update.rerenderStatus).toBe(true)
+    }
+    const complete = reduceRunEvent(state, {
+      kind: 'context_compaction_phase', payload: { phase: 'complete' },
+    }, { termRows: 24 })
+    expect(complete.state.spinnerState.phase).toBe('preparing')
+    expect(complete.state.spinnerState.toolName).toBeNull()
+  })
+
   test('long quota wait shows one model-specific error card and deduplicates re-probes', () => {
     const initial = createStreamMachineState(createInitialState('claude-fable-5', '/tmp'), createSpinnerState())
     const event = {

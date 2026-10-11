@@ -29,6 +29,7 @@ pub use config::DEFAULT_POST_COMPACTION_TOKENS;
 pub use config::DEFAULT_RESERVE_TOKENS;
 pub use config::DEFAULT_SUMMARY_MAX_BYTES;
 pub use config::SUMMARIZER_INPUT_MAX_BYTES;
+pub use controller::Checkpoint;
 pub use controller::CompactionController;
 pub use controller::CompactionResponse;
 pub use controller::PruneOutcome;

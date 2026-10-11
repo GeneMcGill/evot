@@ -74,6 +74,11 @@ export class CompactionTask {
     return results.compactionPhase.read(this.raw.phase, '$.phase')
   }
 
+  get activity(): results.CompactionActivity | null {
+    const activity = this.raw.activity
+    return activity == null ? null : results.compactionActivity.read(activity, '$.activity')
+  }
+
   async result(): Promise<ManualCompactionOutcome> {
     return decodeResult(await this.raw.result(), results.compactionOutcome)
   }

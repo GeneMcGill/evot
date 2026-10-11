@@ -529,9 +529,14 @@ pub fn map_agent_event(event: &evot_engine::AgentEvent) -> Vec<RuntimeEvent> {
             ]
         }
 
-        evot_engine::AgentEvent::ContextCompactionPhase { phase } => vec![RuntimeEvent::Public(
-            RunEventPayload::ContextCompactionPhase { phase: *phase },
-        )],
+        evot_engine::AgentEvent::ContextCompactionPhase { phase, activity } => {
+            vec![RuntimeEvent::Public(
+                RunEventPayload::ContextCompactionPhase {
+                    phase: *phase,
+                    activity: *activity,
+                },
+            )]
+        }
 
         evot_engine::AgentEvent::ContextPruned {
             decided,

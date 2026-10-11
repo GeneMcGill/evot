@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import { decodeQueryEvent, isHostToolEvent, isKnownRunEvent } from '../src/native/contracts/query-event.js'
 import { runPayloadSchemas } from '../src/native/contracts/run-payload.js'
+import { object, oneOf } from '../src/native/contracts/schema.js'
+import compactionProgress from './fixtures/contracts/compaction-progress.json'
 import rich from './fixtures/contracts/run-payloads-rich.json'
 import current from './fixtures/contracts/run-payloads-current.json'
 import fixtures from './fixtures/contracts/run-payloads.json'
@@ -14,6 +16,18 @@ describe('known run payload contracts', () => {
   test('all Rust event kinds have a fixture and a reader', () => {
     expect([...new Set(fixtures.map(f => f.kind))].sort()).toEqual(Object.keys(runPayloadSchemas).sort())
     for (const fixture of [...fixtures, ...current, ...rich]) expect(decode(fixture.kind, fixture.payload)).toEqual({ ...envelope, ...fixture })
+  })
+
+  test('compaction activity is additive and retains the legacy phase vocabulary', () => {
+    const legacyReader = object({ phase: oneOf('pruning', 'planning', 'remote', 'local_fallback', 'local', 'complete') })
+    const historical = fixtures.find(f => f.kind === 'context_compaction_phase')!
+    expect(decode(historical.kind, historical.payload).payload).not.toHaveProperty('activity')
+    for (const fixture of compactionProgress) {
+      const written = decode(fixture.kind, fixture.payload).payload
+      expect(written).toEqual(fixture.payload)
+      expect(legacyReader.read(written, '$')).toEqual(fixture.payload)
+    }
+    expect(() => decode('context_compaction_phase', { phase: 'local', activity: 'invalid' })).toThrow('$.payload.activity')
   })
 
   test('the discriminated payload follows the event kind', () => {

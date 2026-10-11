@@ -23,11 +23,17 @@ const SPINNER_FRAMES = [...SPINNER_CHARS, ...[...SPINNER_CHARS].reverse()]
 const SLOW_THRESHOLD_MS = 8000
 // Actions that legitimately run long get wider thresholds so routine
 // execution is not painted red as "slow": bash commands regularly outlive 8s
-// (builds, test suites), and manual compaction includes an LLM summarization
-// pass with a 30s budget before its deterministic fallback kicks in.
+// (builds, test suites), and compaction includes a potentially long LLM
+// summarization pass. These are display thresholds, not execution deadlines.
 const SLOW_THRESHOLD_BY_TOOL_MS: Record<string, number> = {
   bash: 30_000,
   compact: 30_000,
+  compact_prune: 30_000,
+  compact_remote: 30_000,
+  compact_local: 30_000,
+  compact_local_fallback: 30_000,
+  compact_waiting: 30_000,
+  compact_generating: 30_000,
   log_shot_render: 30_000,
   log_shot_chrome: 30_000,
   log_shot_capture: 30_000,
@@ -80,6 +86,21 @@ export function isPassiveWaitPhase(phase: SpinnerPhase): boolean {
   return phase === 'awaiting_background'
 }
 
+/** Share compaction phase/activity presentation between automatic and manual runs. */
+export function compactionToolName(phase: string | null, activity?: string | null): string {
+  if (phase === 'local' || phase === 'local_fallback') {
+    if (activity === 'waiting') return 'compact_waiting'
+    if (activity === 'generating') return 'compact_generating'
+  }
+  switch (phase) {
+    case 'pruning': return 'compact_prune'
+    case 'remote': return 'compact_remote'
+    case 'local_fallback': return 'compact_local_fallback'
+    case 'local': return 'compact_local'
+    default: return 'compact'
+  }
+}
+
 /**
  * Map a tool name to a human action label shown on the spinner while it runs.
  * Grouped into verbs that mirror the tool-card glyphs (read/search/edit/...).
@@ -100,6 +121,8 @@ export function toolActionLabel(toolName: string): string {
     case 'compact_remote': return 'Compacting remote'
     case 'compact_local': return 'Compacting local'
     case 'compact_local_fallback': return 'Compacting local fallback'
+    case 'compact_waiting': return 'Compacting · waiting for summary'
+    case 'compact_generating': return 'Compacting · generating summary'
     case 'log_shot_render': return 'Rendering shot'
     case 'log_shot_chrome': return 'Starting Chrome'
     case 'log_shot_capture': return 'Capturing PNG'

@@ -170,8 +170,11 @@ async fn run_loop(
     }
     let mut compaction_controller = config.context_config.as_ref().map(|ctx_cfg| {
         let phase_tx = tx.clone();
-        let observer: crate::context::CompactionObserver = Arc::new(move |phase| {
-            phase_tx.progress(AgentEvent::ContextCompactionPhase { phase });
+        let observer: crate::context::CompactionObserver = Arc::new(move |update| {
+            phase_tx.progress(AgentEvent::ContextCompactionPhase {
+                phase: update.phase,
+                activity: update.activity,
+            });
         });
         let mut controller = crate::context::CompactionController::new(
             crate::context::CompactionConfig::from_context_config(ctx_cfg),

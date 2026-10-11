@@ -8,6 +8,7 @@
 //! Each stage that fails records why and falls through to the next; user
 //! cancellation aborts the chain without producing a summary.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
@@ -26,6 +27,7 @@ use super::types::CompactionMethod;
 use super::types::CompactionObserver;
 use super::types::CompactionPhase;
 use super::types::CompactionState;
+use super::types::CompactionUpdate;
 use super::types::FileOps;
 use crate::types::AgentMessage;
 
@@ -152,7 +154,7 @@ pub async fn summarize(
     request: SummaryRequest<'_>,
     contexts: SummaryContexts<'_>,
     config: &CompactionConfig,
-    options: SummaryOptions,
+    mut options: SummaryOptions,
 ) -> SummaryOutcome {
     let input = prepare_input(&request, config, serialize::SerializationOptions::default());
 
@@ -192,6 +194,16 @@ pub async fn summarize(
             method = CompactionMethod::RemoteFailedLocal;
             fallback_reason = Some(bounded_fallback_reason(&reason));
             notify_compaction_phase(&options.observer, CompactionPhase::LocalFallback);
+            // Streaming activity refines this phase, rather than making older
+            // clients think we left the remote-failure fallback path.
+            options.observer = options.observer.take().map(|observer| {
+                Arc::new(move |mut update: CompactionUpdate| {
+                    if update.phase == CompactionPhase::Local {
+                        update.phase = CompactionPhase::LocalFallback;
+                    }
+                    observer(update);
+                }) as CompactionObserver
+            });
         }
         RemoteStage::Unsupported => {
             notify_compaction_phase(&options.observer, CompactionPhase::Local);
@@ -312,10 +324,10 @@ enum LlmStage {
     Cancelled,
 }
 
-/// LLM degradation ladder:
-/// 1. primary model with full transcript
-/// 2. fallback model with full transcript (only after context overflow)
-/// 3. abbreviated tool transcript on the last context-overflowing model
+/// Primary model first; any failure hands the same input to the fallback
+/// model (typically the active model after a switch, when the previous one is
+/// gone). A context overflow on the last model tried gets one more attempt
+/// with the tool transcript abbreviated.
 async fn run_llm_with_degradation(
     request: &SummaryRequest<'_>,
     input: SummarizerInput,
@@ -324,40 +336,35 @@ async fn run_llm_with_degradation(
     config: &CompactionConfig,
     options: &SummaryOptions,
 ) -> LlmStage {
-    let first = run_llm_stage(input.clone(), primary, config, options).await;
-    let LlmStage::Failed(first_reason) = first else {
-        return first;
+    let mut ctx = primary;
+    let mut reason = match run_llm_stage(input.clone(), ctx, config, options).await {
+        LlmStage::Failed(reason) => reason,
+        done => return done,
     };
-    if !crate::provider::error::is_context_overflow_message(&first_reason) {
-        return LlmStage::Failed(first_reason);
-    }
-
-    let mut abbreviated_ctx = primary;
-    if let Some(fallback) = fallback {
+    if let Some(fallback) = fallback.filter(|fallback| fallback.model != primary.model) {
         tracing::warn!(
             model = %primary.model,
             fallback_model = %fallback.model,
-            "compaction summary exceeded model context; trying fallback model"
+            error = %reason,
+            "compaction summary failed on primary model; trying fallback model"
         );
-        match run_llm_stage(input, fallback, config, options).await {
-            ready @ (LlmStage::Ready(_) | LlmStage::Cancelled) => return ready,
-            LlmStage::Failed(reason)
-                if !crate::provider::error::is_context_overflow_message(&reason) =>
-            {
-                return LlmStage::Failed(reason)
-            }
-            LlmStage::Failed(_) => abbreviated_ctx = fallback,
-        }
+        ctx = fallback;
+        reason = match run_llm_stage(input, ctx, config, options).await {
+            LlmStage::Failed(reason) => reason,
+            done => return done,
+        };
     }
-
+    if !crate::provider::error::is_context_overflow_message(&reason) {
+        return LlmStage::Failed(reason);
+    }
     tracing::warn!(
-        model = %abbreviated_ctx.model,
-        "compaction summary still exceeds context; abbreviating tool transcript"
+        model = %ctx.model,
+        "compaction summary exceeds model context; abbreviating tool transcript"
     );
     let abbreviated = prepare_input(request, config, serialize::SerializationOptions {
         abbreviate_tools: true,
     });
-    run_llm_stage(abbreviated, abbreviated_ctx, config, options).await
+    run_llm_stage(abbreviated, ctx, config, options).await
 }
 
 async fn run_llm_stage(
@@ -367,11 +374,12 @@ async fn run_llm_stage(
     options: &SummaryOptions,
 ) -> LlmStage {
     let cancel = stage_cancel(options);
-    let summarize = config.summarizer_mode.summarize_with_reserve(
+    let summarize = config.summarizer_mode.summarize_with_observer(
         input,
         Some(ctx),
         config.summary_reserve_tokens() as u32,
         cancel.clone(),
+        options.observer.clone(),
     );
     let result = match options.timeout {
         Some(timeout) => match tokio::time::timeout(timeout, summarize).await {

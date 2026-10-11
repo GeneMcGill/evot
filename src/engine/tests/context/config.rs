@@ -38,10 +38,10 @@ fn budgets_are_fixed_regardless_of_window_size() {
 fn retained_tail_fits_the_post_compaction_envelope() {
     let cfg = CompactionConfig::default();
     assert_eq!(DEFAULT_POST_COMPACTION_TOKENS, 40_000);
-    assert_eq!(DEFAULT_SUMMARY_RESERVE_TOKENS, 8_000);
-    assert_eq!(DEFAULT_KEEP_RECENT_TOKENS, 32_000);
-    assert_eq!(cfg.retained_tail_budget(0), 32_000);
-    assert_eq!(cfg.retained_tail_budget(5_000), 27_000);
+    assert_eq!(DEFAULT_SUMMARY_RESERVE_TOKENS, 4_000);
+    assert_eq!(DEFAULT_KEEP_RECENT_TOKENS, 36_000);
+    assert_eq!(cfg.retained_tail_budget(0), 36_000);
+    assert_eq!(cfg.retained_tail_budget(5_000), 31_000);
     assert_eq!(DEFAULT_SUMMARY_MAX_BYTES, 32 * 1024);
 
     let mut custom = cfg;
@@ -49,7 +49,7 @@ fn retained_tail_fits_the_post_compaction_envelope() {
     assert_eq!(custom.retained_tail_budget(5_000), 1_000);
 
     let small = CompactionConfig::from_context_window(10_000);
-    assert_eq!(small.retained_tail_budget(500), 4_500);
+    assert_eq!(small.retained_tail_budget(500), 5_500);
 
     // Summary reserve caps at half the post target so tiny windows still
     // leave room for a retained tail.

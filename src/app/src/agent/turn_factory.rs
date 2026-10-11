@@ -16,6 +16,8 @@ pub(super) struct AgentTurnFactory {
     pub mode: ToolMode,
     pub session_id: String,
     pub llm: LlmConfig,
+    /// Selection replaced by the latest model switch, for compaction.
+    pub previous_llm: Option<LlmConfig>,
     pub host_tools: Option<HostTools>,
 }
 
@@ -32,6 +34,7 @@ impl TurnFactory for AgentTurnFactory {
                     input,
                     host_tools: self.host_tools.clone(),
                     consume_process_notifications: true,
+                    previous_llm: self.previous_llm.clone(),
                 },
             )
             .await

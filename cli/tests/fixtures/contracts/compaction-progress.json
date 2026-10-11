@@ -1,0 +1,6 @@
+[
+  {"kind":"context_compaction_phase","payload":{"phase":"local","activity":"waiting"}},
+  {"kind":"context_compaction_phase","payload":{"phase":"local","activity":"generating"}},
+  {"kind":"context_compaction_phase","payload":{"phase":"local_fallback","activity":"waiting"}},
+  {"kind":"context_compaction_phase","payload":{"phase":"complete"}}
+]

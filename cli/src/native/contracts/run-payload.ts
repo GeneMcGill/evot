@@ -63,7 +63,10 @@ export const runPayloadSchemas = {
     reserve_tokens: optional(uint), trigger_threshold: optional(uint), system_prompt_tokens: optional(uint),
     tool_definition_tokens: optional(uint), context_window: uint, will_retry: optional(boolean), message_stats: optional(nullable(messageStats)),
   }),
-  context_compaction_phase: object({ phase: oneOf('pruning', 'planning', 'remote', 'local_fallback', 'local', 'complete') }),
+  context_compaction_phase: object({
+    phase: oneOf('pruning', 'planning', 'remote', 'local_fallback', 'local', 'complete'),
+    activity: optional(nullable(oneOf('waiting', 'generating'))),
+  }),
   context_compaction_completed: object({ reason, result: compactionResult, summary: optional(nullable(text)), context_window: optional(uint), will_retry: optional(boolean) }),
   tool_calls_reviewed: object({
     calls: array(object({ tool_call_id: text, tool_name: text, arguments: text, relevance: number })),

@@ -541,7 +541,7 @@ async fn llm_summarize_initial_uses_initial_prompt() {
     assert!(prompt.contains("<conversation>"));
     assert!(prompt.contains("fix the bug"));
     // Initial prompt asks for the structured checkpoint, not an update.
-    assert!(prompt.contains("structured context"));
+    assert!(prompt.contains("context checkpoint"));
     assert!(!prompt.contains("<previous-summary>"));
 }
 
@@ -705,4 +705,19 @@ async fn llm_summarize_propagates_cancellation() {
     let (result, _captured) =
         summarize_capturing(base_input("[User]: hi"), 4096, vec![Reply::Cancel]).await;
     assert!(matches!(result, Err(SummarizerError::Cancelled)));
+}
+
+#[test]
+fn summary_prompts_ask_for_a_short_merged_handoff() {
+    let initial = prompt::format_initial("[User]: hi", None);
+    let update = prompt::format_update("[User]: more", "## Goal\nOld", None, false);
+    for text in [&initial, &update] {
+        assert!(text.contains("## Goal"));
+        assert!(text.contains("## Next Steps"));
+        assert!(text.contains("under 600 words"));
+        assert!(text.contains("Never narrate turn by turn"));
+        assert!(!text.contains("Play-by-Play"));
+    }
+    assert!(update.contains("merging rather than appending"));
+    assert!(update.contains("must not grow with each update"));
 }

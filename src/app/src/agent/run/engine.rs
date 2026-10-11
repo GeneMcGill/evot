@@ -21,6 +21,10 @@ pub struct EngineOptions {
     pub process_manager: Option<Arc<evot_engine::tools::ProcessManager>>,
     pub prompt_cache_key: Option<String>,
     pub provider_override: Option<Arc<dyn evot_engine::provider::StreamProvider>>,
+    /// The model that produced the current history, when it differs from the
+    /// active one. Local compaction summaries go to it first so the history is
+    /// condensed by the model that fits it; the active model is the fallback.
+    pub compaction_llm: Option<crate::conf::LlmConfig>,
     pub compaction_state: Option<evot_engine::CompactionState>,
     /// Judge for the prune branch of auto-compaction; `None` = summaries only.
     pub judge: Option<Arc<dyn evot_engine::judge::Judge>>,
@@ -39,13 +43,38 @@ pub(super) fn build_engine(
     let model_config = options.model_config;
     let context_config =
         evot_engine::context::ContextConfig::from_model(&model_config, options.thinking_level);
-    let provider: Arc<dyn evot_engine::provider::StreamProvider> =
-        match (options.provider_override, &options.protocol) {
-            (Some(provider), _) => provider,
-            (None, Protocol::Anthropic) => Arc::new(AnthropicProvider),
-            (None, Protocol::OpenAiResponses) => Arc::new(OpenAiResponsesProvider),
-            (None, Protocol::OpenAi) => Arc::new(OpenAiCompatProvider),
-        };
+    let transport = |protocol: &Protocol| -> Arc<dyn evot_engine::provider::StreamProvider> {
+        match protocol {
+            Protocol::Anthropic => Arc::new(AnthropicProvider),
+            Protocol::OpenAiResponses => Arc::new(OpenAiResponsesProvider),
+            Protocol::OpenAi => Arc::new(OpenAiCompatProvider),
+        }
+    };
+    let provider = options
+        .provider_override
+        .clone()
+        .unwrap_or_else(|| transport(&options.protocol));
+    let compaction_context = options.compaction_llm.map(|previous| {
+        let provider = options
+            .provider_override
+            .unwrap_or_else(|| transport(&previous.protocol));
+        evot_engine::context::SummarizerContext {
+            provider: crate::auth::recovery::with_recovery(
+                provider,
+                &previous.provider,
+                &previous.model_config,
+            ),
+            model: previous.model,
+            api_key: previous.api_key,
+            thinking_level: previous.thinking_level,
+            system_prompt: options.system_prompt.clone(),
+            tools: vec![],
+            max_tokens: None,
+            cache_config: evot_engine::types::CacheConfig::default(),
+            prompt_cache_key: options.prompt_cache_key.clone(),
+            model_config: Some(previous.model_config),
+        }
+    });
     let provider_agent = evot_engine::Agent::new(crate::auth::recovery::with_recovery(
         provider,
         &options.provider,
@@ -71,6 +100,7 @@ pub(super) fn build_engine(
         .with_path_guard(options.path_guard)
         .with_thinking(options.thinking_level)
         .with_compaction_state_opt(options.compaction_state)
+        .with_compaction_contexts(compaction_context, None)
         .with_judge(options.judge)
         .with_prune_ledger(Some(options.prune_ledger))
         .with_prompt_cache_key_opt(options.prompt_cache_key)

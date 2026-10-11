@@ -176,6 +176,52 @@ fn run_payload_fixtures_match_current_rust_writer() -> TestResult {
 }
 
 #[test]
+fn compaction_activity_retains_legacy_phase_contract() -> TestResult {
+    #[derive(serde::Deserialize)]
+    struct LegacyPhasePayload {
+        phase: LegacyPhase,
+    }
+    #[derive(Debug, serde::Deserialize, serde::Serialize)]
+    #[serde(rename_all = "snake_case")]
+    enum LegacyPhase {
+        Pruning,
+        Planning,
+        Remote,
+        LocalFallback,
+        Local,
+        Complete,
+    }
+
+    let historical: Vec<serde_json::Value> = serde_json::from_str(include_str!(
+        "../../../cli/tests/fixtures/contracts/run-payloads.json"
+    ))?;
+    let old = historical
+        .iter()
+        .find(|event| event["kind"] == "context_compaction_phase")
+        .ok_or("missing historical phase fixture")?;
+    let examples: Vec<serde_json::Value> = serde_json::from_str(include_str!(
+        "../../../cli/tests/fixtures/contracts/compaction-progress.json"
+    ))?;
+    for example in std::iter::once(old).chain(examples.iter()) {
+        let event = serde_json::json!({
+            "event_id": "fixture", "run_id": "run", "session_id": "session", "turn": 1,
+            "created_at": "2026-01-01T00:00:00Z", "kind": example["kind"], "payload": example["payload"],
+        });
+        let current: evot::agent::RunEvent = serde_json::from_value(event)?;
+        let written = serde_json::to_value(current)?;
+        assert_eq!(written["payload"], example["payload"]);
+        // The legacy reader validates the old field's enum strictly while
+        // tolerating additive keys, as the published event contract does.
+        let legacy: LegacyPhasePayload = serde_json::from_value(written["payload"].clone())?;
+        assert_eq!(
+            serde_json::to_value(legacy.phase)?,
+            written["payload"]["phase"]
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn config_info_writer_and_reader_use_the_contract_boundary() {
     for source in [
         include_str!("../../../cli/addon/src/run.rs"),

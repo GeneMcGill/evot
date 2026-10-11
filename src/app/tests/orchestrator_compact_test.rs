@@ -154,7 +154,7 @@ fn summarizer(provider: Arc<CapturingProvider>) -> CompactSummarizer {
         provider,
         llm: test_llm(),
         reserve_tokens: evot_engine::DEFAULT_SUMMARY_RESERVE_TOKENS,
-        timeout: std::time::Duration::from_secs(60),
+        timeout: None,
     }
 }
 
@@ -196,7 +196,7 @@ async fn failed_llm_compaction_reports_deterministic_fallback() -> TestResult {
                 provider: Arc::new(FailingProvider),
                 llm: test_llm(),
                 reserve_tokens: evot_engine::DEFAULT_SUMMARY_RESERVE_TOKENS,
-                timeout: std::time::Duration::from_secs(60),
+                timeout: None,
             }),
             settings: settings(),
             observer: None,
@@ -234,7 +234,7 @@ async fn timed_out_llm_compaction_uses_deterministic_fallback() -> TestResult {
                 provider: Arc::new(BlockingProvider { started }),
                 llm: test_llm(),
                 reserve_tokens: evot_engine::DEFAULT_SUMMARY_RESERVE_TOKENS,
-                timeout: std::time::Duration::from_millis(10),
+                timeout: Some(std::time::Duration::from_millis(10)),
             }),
             settings: settings(),
             observer: None,
@@ -279,7 +279,7 @@ async fn cancelled_llm_compaction_does_not_write_a_marker() -> TestResult {
                     provider,
                     llm: test_llm(),
                     reserve_tokens: evot_engine::DEFAULT_SUMMARY_RESERVE_TOKENS,
-                    timeout: std::time::Duration::from_secs(60),
+                    timeout: None,
                 }),
                 settings: settings(),
                 observer: None,

@@ -75,6 +75,7 @@ async fn assembles_a_turn_without_an_agent() -> TestResult {
                 }],
                 host_tools: None,
                 consume_process_notifications: false,
+                previous_llm: None,
             },
         )
         .await?;
@@ -105,6 +106,7 @@ async fn assembles_a_turn_without_an_agent() -> TestResult {
                     }],
                     host_tools: None,
                     consume_process_notifications: true,
+                    previous_llm: None,
                 },
             )
             .await?;
@@ -139,6 +141,7 @@ async fn assembles_a_turn_without_an_agent() -> TestResult {
                     input,
                     host_tools: None,
                     consume_process_notifications: true,
+                    previous_llm: None,
                 },
             )
             .await?;
@@ -161,6 +164,7 @@ async fn assembles_a_turn_without_an_agent() -> TestResult {
                 }],
                 host_tools: None,
                 consume_process_notifications: true,
+                previous_llm: None,
             },
         )
         .await?;
@@ -201,6 +205,7 @@ async fn assembles_a_turn_without_an_agent() -> TestResult {
                     input,
                     host_tools: None,
                     consume_process_notifications: true,
+                    previous_llm: None,
                 },
             )
             .await?;
@@ -241,6 +246,7 @@ async fn assembles_a_turn_without_an_agent() -> TestResult {
                 }],
                 host_tools: None,
                 consume_process_notifications: true,
+                previous_llm: None,
             },
         )
         .await?;
@@ -265,6 +271,7 @@ async fn assembles_a_turn_without_an_agent() -> TestResult {
                     input: Vec::new(),
                     host_tools: None,
                     consume_process_notifications: false,
+                    previous_llm: None,
                 },
             )
             .await;

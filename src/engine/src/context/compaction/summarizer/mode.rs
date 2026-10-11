@@ -8,10 +8,13 @@ use super::llm;
 use super::types::SummarizerError;
 use super::types::SummarizerInput;
 use super::types::SummarizerOutput;
+use crate::context::compaction::types::CompactionObserver;
 use crate::provider::StreamProvider;
 use crate::types::ThinkingLevel;
 
-pub const DEFAULT_SUMMARY_RESERVE_TOKENS: u32 = 8_000;
+/// Output budget for one summary. The prompt targets ~600 words; 4k tokens is
+/// ample headroom and bounds the slow generation phase of compaction.
+pub const DEFAULT_SUMMARY_RESERVE_TOKENS: u32 = 4_000;
 
 /// LLM-generated structured summary configuration.
 #[derive(Debug, Clone)]
@@ -73,10 +76,24 @@ impl SummarizerMode {
         reserve_tokens: u32,
         cancel: CancellationToken,
     ) -> Result<SummarizerOutput, SummarizerError> {
+        self.summarize_with_observer(input, ctx, reserve_tokens, cancel, None)
+            .await
+    }
+
+    pub async fn summarize_with_observer(
+        &self,
+        input: SummarizerInput,
+        ctx: Option<&SummarizerContext>,
+        reserve_tokens: u32,
+        cancel: CancellationToken,
+        observer: Option<CompactionObserver>,
+    ) -> Result<SummarizerOutput, SummarizerError> {
         let ctx = ctx
             .ok_or_else(|| SummarizerError::Failed("LLM mode requires SummarizerContext".into()))?;
         match self {
-            Self::Llm { .. } => llm::summarize(input, ctx, reserve_tokens, cancel).await,
+            Self::Llm { .. } => {
+                llm::summarize_with_observer(input, ctx, reserve_tokens, cancel, observer).await
+            }
         }
     }
 }

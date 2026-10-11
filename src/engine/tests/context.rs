@@ -24,6 +24,8 @@ mod prune;
 mod remote;
 #[path = "context/summarizer.rs"]
 mod summarizer;
+#[path = "context/summarizer_progress.rs"]
+mod summarizer_progress;
 #[path = "context/summary.rs"]
 mod summary;
 #[path = "context/tokens.rs"]

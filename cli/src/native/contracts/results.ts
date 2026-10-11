@@ -66,6 +66,7 @@ export type ManualCompactionOutcome =
   | { status: 'nothing_to_compact' }
   | { status: 'cancelled' }
 export type CompactionPhase = 'pruning' | 'planning' | 'remote' | 'local_fallback' | 'local' | 'complete'
+export type CompactionActivity = 'waiting' | 'generating'
 export interface ServerInfo { port: number; address: string; channels: string[]; channelCount: number }
 export interface LoginCodeResponse { code: string; login_url: string; expires_at: number; expires_in_ms: number; interval_ms: number }
 export interface CloudUser { id: string; name: string; email: string }
@@ -111,6 +112,7 @@ export const backgroundProcess: Schema<BackgroundProcess> = object({
 })
 export const backgroundProcesses = array(backgroundProcess)
 export const compactionPhase: Schema<CompactionPhase> = oneOf('pruning', 'planning', 'remote', 'local_fallback', 'local', 'complete')
+export const compactionActivity: Schema<CompactionActivity> = oneOf('waiting', 'generating')
 export const compactionOutcome: Schema<ManualCompactionOutcome> = tagged('status', {
   compacted: object({
     status: oneOf('compacted'), summary: text, tokens_before: uint, tokens_after: uint,

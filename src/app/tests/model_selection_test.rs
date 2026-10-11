@@ -312,3 +312,40 @@ fn model_selection_dependency_boundary() {
     assert!(napi.contains("ModelSelection::display_thinking_level_for"));
     assert!(!napi.contains("fn display_thinking_level("));
 }
+
+#[test]
+fn model_switch_remembers_the_replaced_selection_for_compaction() -> TestResult {
+    let mut config = config();
+    config
+        .providers
+        .get_mut("anthropic")
+        .ok_or("missing fixture provider")?
+        .models
+        .push("claude-sonnet-4-6".into());
+    let selection = ModelSelection::new(config.active_llm()?);
+    assert!(selection.previous_llm().is_none());
+
+    // Effort-only changes are not a model switch.
+    selection.set_thinking_level(ThinkingLevel::Low);
+    assert!(selection.previous_llm().is_none());
+
+    selection.select_by_spec(&config, "anthropic:claude-sonnet-4-6")?;
+    let previous = selection.previous_llm().ok_or("switch not remembered")?;
+    assert_eq!(previous.model, "claude-opus-4-6");
+    assert_eq!(previous.thinking_level, ThinkingLevel::Low);
+    assert_eq!(selection.snapshot().model, "claude-sonnet-4-6");
+
+    // Re-selecting the same model keeps the earlier switch.
+    selection.select_configured(&config, "anthropic", "claude-sonnet-4-6", None)?;
+    assert_eq!(
+        selection.previous_llm().map(|llm| llm.model),
+        Some("claude-opus-4-6".into())
+    );
+
+    selection.select_configured(&config, "anthropic", "claude-opus-4-6", None)?;
+    assert_eq!(
+        selection.previous_llm().map(|llm| llm.model),
+        Some("claude-sonnet-4-6".into())
+    );
+    Ok(())
+}

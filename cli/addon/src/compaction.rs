@@ -2,6 +2,8 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use evot::api::Agent;
+use evot_engine::context::compaction::types::CompactionActivity;
+use evot_engine::context::compaction::types::CompactionUpdate;
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use tokio::task::JoinHandle;
@@ -11,7 +13,7 @@ use tokio_util::sync::CancellationToken;
 pub struct NapiCompaction {
     handle: Mutex<Option<JoinHandle<std::result::Result<String, String>>>>,
     cancel: CancellationToken,
-    phase: Arc<Mutex<String>>,
+    status: Arc<Mutex<CompactionUpdate>>,
 }
 
 impl NapiCompaction {
@@ -22,19 +24,14 @@ impl NapiCompaction {
     ) -> Self {
         let cancel = CancellationToken::new();
         let task_cancel = cancel.clone();
-        let phase = Arc::new(Mutex::new("planning".to_string()));
-        let observer_phase = Arc::clone(&phase);
+        let status = Arc::new(Mutex::new(CompactionUpdate {
+            phase: evot::api::ManualCompactionPhase::Planning,
+            activity: None,
+        }));
+        let observer_status = Arc::clone(&status);
         let observer: evot::api::ManualCompactionObserver = Arc::new(move |next| {
-            let value = match next {
-                evot::api::ManualCompactionPhase::Pruning => "pruning",
-                evot::api::ManualCompactionPhase::Planning => "planning",
-                evot::api::ManualCompactionPhase::Remote => "remote",
-                evot::api::ManualCompactionPhase::LocalFallback => "local_fallback",
-                evot::api::ManualCompactionPhase::Local => "local",
-                evot::api::ManualCompactionPhase::Complete => "complete",
-            };
-            if let Ok(mut current) = observer_phase.lock() {
-                *current = value.to_string();
+            if let Ok(mut current) = observer_status.lock() {
+                *current = next;
             }
         });
         let handle = tokio::spawn(async move {
@@ -53,7 +50,7 @@ impl NapiCompaction {
         Self {
             handle: Mutex::new(Some(handle)),
             cancel,
-            phase,
+            status,
         }
     }
 }
@@ -79,10 +76,36 @@ impl NapiCompaction {
 
     #[napi(getter)]
     pub fn phase(&self) -> Result<String> {
-        self.phase
+        self.status
             .lock()
-            .map(|phase| phase.clone())
-            .map_err(|_| Error::from_reason("compaction phase lock poisoned"))
+            .map(|status| {
+                match status.phase {
+                    evot::api::ManualCompactionPhase::Pruning => "pruning",
+                    evot::api::ManualCompactionPhase::Planning => "planning",
+                    evot::api::ManualCompactionPhase::Remote => "remote",
+                    evot::api::ManualCompactionPhase::LocalFallback => "local_fallback",
+                    evot::api::ManualCompactionPhase::Local => "local",
+                    evot::api::ManualCompactionPhase::Complete => "complete",
+                }
+                .to_string()
+            })
+            .map_err(|_| Error::from_reason("compaction status lock poisoned"))
+    }
+
+    #[napi(getter)]
+    pub fn activity(&self) -> Result<Option<String>> {
+        self.status
+            .lock()
+            .map(|status| {
+                status.activity.map(|activity| {
+                    match activity {
+                        CompactionActivity::Waiting => "waiting",
+                        CompactionActivity::Generating => "generating",
+                    }
+                    .to_string()
+                })
+            })
+            .map_err(|_| Error::from_reason("compaction status lock poisoned"))
     }
 
     #[napi]

@@ -51,7 +51,6 @@ enum AbortRunOutcome {
 }
 
 const RUN_ABORT_WAIT_TIMEOUT: Duration = Duration::from_secs(10);
-const COMPACTION_SUMMARY_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct Agent {
     selection: ModelSelection,
@@ -616,7 +615,7 @@ impl Agent {
             provider,
             llm,
             reserve_tokens: evot_engine::DEFAULT_SUMMARY_RESERVE_TOKENS,
-            timeout: COMPACTION_SUMMARY_TIMEOUT,
+            timeout: None,
         }
     }
 
@@ -667,6 +666,7 @@ impl Agent {
             mode: request.mode,
             session_id: session_id.clone(),
             llm,
+            previous_llm: self.selection.previous_llm(),
             host_tools: request.host_tools.clone(),
         });
 
@@ -903,6 +903,7 @@ impl Agent {
                     input: Vec::new(),
                     host_tools: None,
                     consume_process_notifications: false,
+                    previous_llm: None,
                 },
             )
             .await?;

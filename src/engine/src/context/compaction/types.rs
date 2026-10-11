@@ -51,11 +51,41 @@ pub enum CompactionPhase {
     Complete,
 }
 
-pub type CompactionObserver = Arc<dyn Fn(CompactionPhase) + Send + Sync>;
+/// Transient activity within an existing phase; the published phase vocabulary
+/// stays unchanged so older clients can still follow the lifecycle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompactionActivity {
+    Waiting,
+    Generating,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct CompactionUpdate {
+    pub phase: CompactionPhase,
+    pub activity: Option<CompactionActivity>,
+}
+
+pub type CompactionObserver = Arc<dyn Fn(CompactionUpdate) + Send + Sync>;
 
 pub fn notify_compaction_phase(observer: &Option<CompactionObserver>, phase: CompactionPhase) {
     if let Some(observer) = observer {
-        observer(phase);
+        observer(CompactionUpdate {
+            phase,
+            activity: None,
+        });
+    }
+}
+
+pub fn notify_compaction_activity(
+    observer: &Option<CompactionObserver>,
+    activity: CompactionActivity,
+) {
+    if let Some(observer) = observer {
+        observer(CompactionUpdate {
+            phase: CompactionPhase::Local,
+            activity: Some(activity),
+        });
     }
 }
 

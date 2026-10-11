@@ -116,9 +116,11 @@ fn config_small() -> CompactionConfig {
 async fn controller_reports_live_local_phase_order() {
     let phases = Arc::new(std::sync::Mutex::new(Vec::new()));
     let observed = Arc::clone(&phases);
-    let observer: evotengine::CompactionObserver = Arc::new(move |phase| {
-        if let Ok(mut phases) = observed.lock() {
-            phases.push(phase);
+    let observer: evotengine::CompactionObserver = Arc::new(move |update| {
+        if update.activity.is_none() {
+            if let Ok(mut phases) = observed.lock() {
+                phases.push(update.phase);
+            }
         }
     });
     let mut ctrl = CompactionController::new(config_small()).with_observer(observer);
@@ -807,9 +809,11 @@ async fn controller_reports_live_remote_fallback_phase_order() {
 
     let phases = Arc::new(std::sync::Mutex::new(Vec::new()));
     let observed = Arc::clone(&phases);
-    let observer: evotengine::CompactionObserver = Arc::new(move |phase| {
-        if let Ok(mut phases) = observed.lock() {
-            phases.push(phase);
+    let observer: evotengine::CompactionObserver = Arc::new(move |update| {
+        if update.activity.is_none() {
+            if let Ok(mut phases) = observed.lock() {
+                phases.push(update.phase);
+            }
         }
     });
     let mut ctrl = CompactionController::new(config_small()).with_observer(observer);
@@ -1570,4 +1574,67 @@ async fn refusal_on_single_tool_turn_summarizes_the_whole_turn() {
     assert!(messages
         .iter()
         .all(|message| !matches!(message, AgentMessage::Llm(Message::ToolResult { .. }))));
+}
+
+#[tokio::test]
+async fn run_end_summarizes_above_post_turn_threshold_but_mid_run_waits() {
+    use evotengine::context::compaction::summary::SummaryContexts;
+    use evotengine::context::compaction::Checkpoint;
+
+    // Thresholds must differ for the comparison: 90k mid-run vs 80k run-end.
+    let config = CompactionConfig {
+        context_window: 100_000,
+        reserve_tokens: 10_000,
+        ..config_small()
+    };
+    assert_eq!(config.trigger_threshold(), 90_000);
+    assert_eq!(config.post_turn_trigger_threshold(), 80_000);
+
+    let mut messages = vec![user_msg(&big_text(200)), assistant_msg(&big_text(200))];
+    for _ in 0..20 {
+        messages.push(user_msg(&big_text(300)));
+        messages.push(assistant_msg(&big_text(300)));
+    }
+    let usage = UsageSnapshot {
+        input: 85_000,
+        cache_read: 0,
+        cache_write: 0,
+        output: 100,
+        total_tokens: 0,
+        model: model_id(),
+        timestamp: 1000,
+        stop_reason: StopReason::Stop,
+        error_message: None,
+    };
+
+    let mut ctrl = CompactionController::new(config.clone());
+    let mid_run = ctrl
+        .after_response_with_contexts(
+            &mut messages.clone(),
+            &usage,
+            &model_id(),
+            SummaryContexts::same(None),
+            Checkpoint::MidRun,
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(mid_run.stats.is_none(), "85k is below the 90k mid-run line");
+
+    let mut ctrl = CompactionController::new(config);
+    let run_end = ctrl
+        .after_response_with_contexts(
+            &mut messages,
+            &usage,
+            &model_id(),
+            SummaryContexts::same(None),
+            Checkpoint::RunEnd,
+            CancellationToken::new(),
+        )
+        .await;
+    // Without an LLM context the required summary aborts, but the decision to
+    // summarize at run end is what this test pins.
+    assert_eq!(
+        run_end.reason,
+        Some(evotengine::context::CompactReason::Threshold)
+    );
 }

@@ -167,6 +167,7 @@ pub enum AgentEvent {
     /// Live lifecycle phase, emitted at the actual execution boundary.
     ContextCompactionPhase {
         phase: crate::context::CompactionPhase,
+        activity: Option<crate::context::compaction::types::CompactionActivity>,
     },
     /// The judge-driven prune branch ran at run end. `decided` is a round of
     /// verdicts (no edit yet); `applied` means `messages` is the new context

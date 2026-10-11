@@ -2,7 +2,7 @@ import { providerFailurePresentation } from '../../provider/error-presentation.j
 import { formatLongWaitError, reviewNotice } from '../../render/verbose.js'
 import { buildError, buildSystem, buildVerboseEvent, buildEventCard, isVisibleEvent, withoutRedundantErrorTail, type OutputLine } from '../../render/output.js'
 import { formatDuration } from '../../render/format.js'
-import { recordStreamDelta, resetStreamStats, setLongWait, setRetryWait, setSpinnerPhase, type SpinnerState } from '../spinner.js'
+import { compactionToolName, recordStreamDelta, resetStreamStats, setLongWait, setRetryWait, setSpinnerPhase, type SpinnerState } from '../spinner.js'
 import { assistantToolCalls } from './assistant-content.js'
 import { assistantMessageToOutputLines } from '../../render/assistant.js'
 import { applyEvent } from './reducer.js'
@@ -246,15 +246,7 @@ export function reduceRunEvent(prev: StreamMachineState, event: RunEvent, ctx: S
         spinnerState: setSpinnerPhase(resetStreamStats(state.spinnerState), 'preparing'),
       }
     } else {
-      const toolName = phase === 'pruning'
-        ? 'compact_prune'
-        : phase === 'remote'
-        ? 'compact_remote'
-        : phase === 'local_fallback'
-          ? 'compact_local_fallback'
-          : phase === 'local'
-            ? 'compact_local'
-            : 'compact'
+      const toolName = compactionToolName(phase, known.payload.activity)
       state = {
         ...state,
         spinnerState: setSpinnerPhase(resetStreamStats(state.spinnerState), 'executing', toolName),

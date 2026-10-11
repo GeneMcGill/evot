@@ -1,7 +1,8 @@
-import type { CompactionPhase, ManualCompactionOutcome } from '../../native/contracts/results.js'
+import type { CompactionActivity, CompactionPhase, ManualCompactionOutcome } from '../../native/contracts/results.js'
 
 export interface ManualCompactionTask {
   readonly phase: CompactionPhase
+  readonly activity?: CompactionActivity | null
   result(): Promise<ManualCompactionOutcome>
   abort(): void
 }
@@ -13,6 +14,7 @@ export class ManualCompaction {
 
   get active(): boolean { return this.task !== null }
   get phase(): CompactionPhase | null { return this.task?.phase ?? null }
+  get activity(): CompactionActivity | null { return this.task?.activity ?? null }
 
   abort(): void { this.task?.abort() }
 
