@@ -91,7 +91,7 @@ impl OpenAiCompatProvider {
         }
 
         // Send request (gzipped where the endpoint has said it accepts it) and check HTTP status
-        let response = http::send_json_stream_request(builder, &url, &body).await?;
+        let response = http::send_json_stream_request(builder, &url, body).await?;
         let response = http::check_error_status(response).await?;
 
         // Classify response by content-type

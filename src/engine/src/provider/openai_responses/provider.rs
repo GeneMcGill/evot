@@ -67,7 +67,7 @@ impl OpenAiResponsesProvider {
             config.model, url
         );
 
-        let mut response = send(&url, model_config, &config, &body).await?;
+        let mut response = send(&url, model_config, &config, body).await?;
 
         // A native compaction blob can become invalid after an upstream account
         // or compatibility boundary. On semantic client rejection, retry once
@@ -84,7 +84,7 @@ impl OpenAiResponsesProvider {
                 let mut fallback = config.clone();
                 fallback.messages = messages;
                 let fallback_body = request::build_request_body(&fallback);
-                response = send(&url, model_config, &fallback, &fallback_body).await?;
+                response = send(&url, model_config, &fallback, fallback_body).await?;
             }
         }
 
@@ -107,7 +107,7 @@ async fn send(
     url: &str,
     model_config: &ModelConfig,
     config: &StreamConfig,
-    body: &serde_json::Value,
+    body: serde_json::Value,
 ) -> Result<reqwest::Response, ProviderError> {
     let client = crate::provider::error::new_client()?;
     let mut builder = client

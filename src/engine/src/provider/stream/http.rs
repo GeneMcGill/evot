@@ -122,24 +122,39 @@ fn gzip(data: &[u8]) -> std::io::Result<Vec<u8>> {
 /// A 415 to a gzipped body means the origin stopped accepting it (e.g. a new
 /// deployment behind the same host): the origin is forgotten and the request
 /// is sent once more as plain JSON.
+///
+/// The body is taken by value so the JSON tree is released as soon as the
+/// bytes exist: a long tool-heavy context is otherwise held three times for
+/// the whole streamed response (messages, encoded bytes, and this tree).
 pub async fn send_json_stream_request(
     builder: reqwest::RequestBuilder,
     url: &str,
-    body: &serde_json::Value,
+    body: serde_json::Value,
 ) -> Result<reqwest::Response, ProviderError> {
-    let plain = serde_json::to_vec(body)
+    let plain = serde_json::to_vec(&body)
         .map_err(|e| ProviderError::Other(format!("could not encode the request: {e}")))?;
+    drop(body);
     let fallback = builder.try_clone();
 
-    let compressed = if plain.len() >= COMPRESS_MIN_BYTES && origin_accepts_gzip(url) {
-        let bytes = plain.clone();
-        // Compressing a multi-MB body is tens of ms of CPU: keep it off the async workers.
-        tokio::task::spawn_blocking(move || gzip(&bytes))
-            .await
-            .ok()
-            .and_then(Result::ok)
+    let (plain, compressed) = if plain.len() >= COMPRESS_MIN_BYTES && origin_accepts_gzip(url) {
+        // Compressing a multi-MB body is tens of ms of CPU: keep it off the
+        // async workers. The plain bytes travel through the task instead of
+        // being cloned; they are still needed for the 415 fallback.
+        match tokio::task::spawn_blocking(move || {
+            let compressed = gzip(&plain).ok();
+            (plain, compressed)
+        })
+        .await
+        {
+            Ok((plain, compressed)) => (plain, compressed),
+            Err(e) => {
+                return Err(ProviderError::Other(format!(
+                    "could not compress the request: {e}"
+                )))
+            }
+        }
     } else {
-        None
+        (plain, None)
     };
 
     let Some(compressed) = compressed else {

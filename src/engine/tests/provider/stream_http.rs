@@ -447,7 +447,7 @@ mod request_compression {
         let builder = reqwest::Client::new()
             .post(&url)
             .header("content-type", "application/json");
-        send_json_stream_request(builder, &url, body)
+        send_json_stream_request(builder, &url, body.clone())
             .await
             .unwrap()
             .status()
