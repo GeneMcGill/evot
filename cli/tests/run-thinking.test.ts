@@ -69,7 +69,7 @@ describe('run thinking timing for the final footer', () => {
     expect(timing.finish()).toBeNull()
   })
 
-  test('thinking ends without a card or status row in live and committed output', () => {
+  test('finished thinking retains its text without adding a timing card or status row', () => {
     const timing = new RunThinking()
     timing.observe(delta('thinking', 'plan'), 0)
     timing.observe(delta('text', 'Done.', 1), 8000)
@@ -77,8 +77,9 @@ describe('run thinking timing for the final footer', () => {
       { type: 'thinking' as const, contentIndex: 0, text: 'plan' },
       { type: 'text' as const, contentIndex: 1, text: 'Done.' },
     ]
-    expect(rows(assistantMessageToOutputLines(content, false, { streaming: true }))).toEqual(['', '⏺ Done.'])
-    expect(rows(assistantMessageToOutputLines(content))).toEqual(['', '⏺ Done.'])
+    const expected = ['', '✻ plan', '', '⏺ Done.']
+    expect(rows(assistantMessageToOutputLines(content, false, { streaming: true }))).toEqual(expected)
+    expect(rows(assistantMessageToOutputLines(content))).toEqual(expected)
     expect(rows(assistantMessageToOutputLines(content, true)).join('\n')).toContain('plan')
     const footer = buildRunFooterLine(0, 10000, 2, timing.finish(10000))
     expect(stripAnsi(footer?.text ?? '')).toContain('2 turns · thought 8s · done')

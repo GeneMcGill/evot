@@ -59,8 +59,8 @@ export function assistantContentToOutputLines(
 ): OutputLine[] {
   const ordered = [...content].sort((a, b) => a.contentIndex - b.contentIndex)
   // Only the block still receiving deltas is streaming. Finished reasoning
-  // is hidden in compact output. Timing belongs only in the final run footer,
-  // not in a separate live status row or a committed thinking card.
+  // keeps the same compact tail window. Timing belongs only in the final run
+  // footer, not in a separate live status row or a committed thinking card.
   const streaming = options.streaming ?? false
   // Empty/whitespace deltas do not finish the visible thinking window.
   const last = ordered.findLastIndex(block => block.type === 'tool_call' || block.text.trim().length > 0)

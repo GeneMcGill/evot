@@ -108,11 +108,21 @@ describe('buildThinkingLines', () => {
     const text = 'first\n\nsecond'
     const folds = (options: { streaming?: boolean; expanded?: boolean }) =>
       [...new Set(buildThinkingLines(text, options).map(line => line.thinkingFold))]
-    // Live block: tail window. Finished compact: one-row summary. Expanded: none.
+    // Both live and finished compact views keep the tail; expanded never folds.
     expect(folds({ streaming: true })).toEqual(['tail'])
-    expect(folds({})).toEqual(['collapsed'])
+    expect(folds({})).toEqual(['tail'])
     expect(folds({ streaming: true, expanded: true })).toEqual([undefined])
     expect(folds({ expanded: true })).toEqual([undefined])
+  })
+
+  test('each block shares its own render identity, even for identical text', () => {
+    const first = buildThinkingLines('first\n\nsecond')
+    const next = buildThinkingLines('first\n\nsecond')
+    const blockId = first[0]?.thinkingBlockId
+    expect(typeof blockId).toBe('string')
+    expect(first.every(line => line.thinkingBlockId === blockId)).toBe(true)
+    expect(next[0]?.thinkingBlockId).not.toBe(blockId)
+    expect(new Set(first.map(line => line.id)).size).toBe(first.length)
   })
 })
 

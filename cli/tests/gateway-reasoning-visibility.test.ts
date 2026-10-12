@@ -49,25 +49,21 @@ describe('gateway reasoning visibility', () => {
     const live = render(updated, true)
     expect(live).toContain('检查协议转换是否丢失摘要。')
     expect(live.indexOf('read')).toBeLessThan(live.indexOf('✻'))
-    // Not streaming = the block is finished, and finished reasoning leaves
-    // the compact transcript; ctrl+o still has it.
-    expect(render(updated, false)).not.toContain('✻')
+    // Finishing the block retains the visible original text in compact view.
+    expect(render(updated, false)).toBe(live)
     expect(render(updated, false, true)).toContain('检查协议转换是否丢失摘要。')
   })
 
-  test('the fifth turn summary from the reported session streams in full and survives completion behind ctrl+o', () => {
+  test('the fifth turn summary from the reported session survives completion in compact and expanded views', () => {
     const text = '**Analyzing git diff and streaming behavior**\n\n**Detailing theme and interface redesign changes**\n\n'
     const streamed = appendAssistantDelta([], {
       content_index: 0, content_type: 'thinking', delta: text,
     })
     const completed = completedAssistantContent([{ type: 'thinking', text }], streamed)
-    for (const visible of [render(streamed, true), render(completed, false, true)]) {
+    for (const visible of [render(streamed, true), render(completed, false), render(completed, false, true)]) {
       expect(visible).toContain('Analyzing git diff and streaming behavior')
       expect(visible).toContain('Detailing theme and interface redesign changes')
     }
-    // The compact transcript drops finished reasoning entirely.
-    const collapsed = render(completed, false)
-    expect(collapsed).not.toContain('✻')
-    expect(collapsed).not.toContain('Analyzing git diff')
+    expect(render(completed, false)).toBe(render(streamed, true))
   })
 })

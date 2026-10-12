@@ -2,7 +2,7 @@ import { describe, test, expect, beforeAll } from 'bun:test'
 import { HistoryRenderCache, advancePrevKind } from '../src/term/viewmodel/history-cache.js'
 import { buildOutputBlocks } from '../src/term/viewmodel/output.js'
 import { blocksToLines } from '../src/term/viewmodel/types.js'
-import type { OutputLine } from '../src/render/output.js'
+import { buildThinkingLines, type OutputLine } from '../src/render/output.js'
 import chalk from 'chalk'
 
 beforeAll(() => {
@@ -47,6 +47,27 @@ describe('HistoryRenderCache', () => {
       const incremental = cache.sync(history, COLS)
       const full = fullRebuild(history, COLS)
       expect(incremental).toEqual(full)
+    }
+  })
+
+  test('adjacent committed thoughts keep separate windows across append, resize and rebuild', () => {
+    const text = Array.from({ length: 20 }, (_, i) => `reasoning row ${i + 1}`).join('\n\n')
+    for (const expanded of [false, true]) {
+      const cache = new HistoryRenderCache()
+      const history: OutputLine[] = []
+      for (const commit of [
+        buildThinkingLines(text, { expanded }),
+        buildThinkingLines(text.replaceAll('reasoning', 'next'), { expanded }),
+      ]) {
+        history.push(...commit)
+        expect(cache.sync(history, COLS)).toEqual(fullRebuild(history, COLS))
+      }
+      for (const columns of [24, 80, COLS]) {
+        expect(cache.sync(history, columns)).toEqual(fullRebuild(history, columns))
+      }
+      const before = [...cache.sync(history, COLS)]
+      cache.reset()
+      expect(cache.sync(history, COLS)).toEqual(before)
     }
   })
 

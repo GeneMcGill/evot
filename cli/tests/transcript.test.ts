@@ -1,6 +1,10 @@
 import { describe, expect, test } from 'bun:test'
 import { messagesToOutputLines } from '../src/render/output.js'
 import { transcriptToMessages } from '../src/session/transcript.js'
+import { assistantMessageToOutputLines } from '../src/render/assistant.js'
+import { buildOutputBlocks } from '../src/term/viewmodel/output.js'
+import { blocksToLines } from '../src/term/viewmodel/types.js'
+import stripAnsi from 'strip-ansi'
 
 describe('transcript conversion', () => {
   test('replay accepts opaque JSON tool arguments without crashing preview reconstruction', () => {
@@ -39,8 +43,26 @@ describe('transcript conversion', () => {
     }])
     const fold = (expanded?: boolean) =>
       messagesToOutputLines(messages, expanded).filter(line => line.kind === 'thinking').map(line => line.thinkingFold)
-    expect(fold()).toEqual(['collapsed'])
+    expect(fold()).toEqual(['tail'])
     expect(fold(true)).toEqual([undefined])
+  })
+
+  test('resumed reasoning retains the same compact window as the live and committed views', () => {
+    const text = Array.from({ length: 20 }, (_, i) => `reasoning row ${i + 1}`).join('\n\n')
+    const messages = transcriptToMessages([{
+      type: 'assistant',
+      content: [{ type: 'thinking', text }, { type: 'text', text: 'answer' }],
+    }])
+    const content = messages[0]?.content
+    if (!content) throw new Error('missing assistant content')
+    const render = (lines: ReturnType<typeof messagesToOutputLines>) =>
+      blocksToLines(buildOutputBlocks(lines, { columns: 80 })).map(stripAnsi)
+    const resumed = render(messagesToOutputLines(messages))
+    expect(resumed).toEqual(render(assistantMessageToOutputLines(content)))
+    expect(resumed).toEqual(render(assistantMessageToOutputLines(content, false, { streaming: true })))
+    expect(resumed).toContain('✻ ↑ 18 rows (ctrl+o)')
+    expect(resumed).toContain('  reasoning row 20')
+    expect(resumed).toContain('⏺ answer')
   })
 
   test('restores tool-result details onto the canonical tool block', () => {

@@ -276,12 +276,13 @@ export interface OutputLine {
   rawMarkdown?: string
   /** Thinking text already contains markdown ANSI; apply only the outer tint. */
   thinkingStyle?: boolean
+  /** Render-only identity: adjacent reasoning blocks keep separate windows. */
+  thinkingBlockId?: string
   /**
-   * Fold policy for a reasoning block. Every thinking line of one block
-   * carries the same value; the viewmodel wraps the whole run and folds the
-   * visual rows. `tail` keeps the newest rows once the block overflows the
-   * live budget (the streaming window); `collapsed` hides finished reasoning.
-   * Absent means never fold (expanded view).
+   * Fold policy shared by every line of one reasoning block. The viewmodel
+   * wraps the whole block first, then keeps its newest visual rows. The same
+   * window stays visible after streaming ends. Absent means never fold
+   * (expanded view).
    */
   thinkingFold?: ThinkingFold
   /** System text that already carries its own ANSI styling (e.g. `/skill`).
@@ -325,12 +326,8 @@ export interface OutputLine {
   >
 }
 
-/**
- * How the viewmodel folds a reasoning block when not expanded:
- * `tail`      the live window that scrolls while the block streams;
- * `collapsed` a finished block: it renders nothing in the transcript.
- */
-export type ThinkingFold = 'tail' | 'collapsed'
+/** Compact reasoning scrolls in a tail window, then keeps that window. */
+export type ThinkingFold = 'tail'
 
 export type ToolCardState = 'pending' | 'success' | 'error'
 
@@ -411,28 +408,27 @@ function hasReasoningContent(text: string): boolean {
 /**
  * Reasoning rows, rendered as markdown and tinted muted by the viewmodel.
  *
- * Unless `expanded`, the viewmodel folds reasoning: while it streams, a short
- * tail window scrolls in place (the newest rows stay visible and the footer
- * never moves); once the block is finished it collapses to a single summary
- * row, so the transcript keeps only a marker of the thought, not its text.
- * `streaming` also selects fence handling in the markdown pipeline.
+ * Unless `expanded`, a short tail window scrolls in place while reasoning
+ * streams. Once the block finishes, the same window stays in the transcript
+ * with its original text and an expand hint for any hidden rows.
+ * `streaming` only selects fence handling in the markdown pipeline.
  */
 export function buildThinkingLines(
   text: string,
-  options: { streaming?: boolean; expanded?: boolean; fold?: ThinkingFold } = {},
+  options: { streaming?: boolean; expanded?: boolean } = {},
 ): OutputLine[] {
   if (!text.trim() || !hasReasoningContent(text)) return []
   const rendered = renderThinkingMarkdown(text, { streaming: options.streaming })
   if (!rendered || !rendered.trim()) return []
   const cleaned = rendered.replace(/^\n+/, '').replace(/\n+$/, '')
-  const thinkingFold: ThinkingFold | undefined = options.expanded
-    ? undefined
-    : options.fold ?? (options.streaming ? 'tail' : 'collapsed')
-  return cleaned.split('\n').map((line) => ({
-    id: genId('think'),
+  const thinkingFold: ThinkingFold | undefined = options.expanded ? undefined : 'tail'
+  const thinkingBlockId = genId('think')
+  return cleaned.split('\n').map((line, index) => ({
+    id: index === 0 ? thinkingBlockId : genId('think'),
     kind: 'thinking' as const,
     text: line,
     thinkingStyle: true,
+    thinkingBlockId,
     thinkingFold,
   }))
 }

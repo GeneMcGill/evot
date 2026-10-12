@@ -16,16 +16,12 @@ export interface OutputContext {
 }
 
 /**
- * Height of the live reasoning window, in visual rows: a header counting the
- * rows that scrolled out, then the newest rows. Reasoning at or under this
- * budget streams in full. Once the block is finished (another block follows
- * it, or the message is committed) it disappears, as in kiro-cli: reasoning
- * is something to watch while it happens, not a record to keep. ctrl+o still
- * shows every finished block in full.
+ * Height of the compact reasoning window, in visual rows. Short blocks stay
+ * in full; longer blocks show a hidden-row count and the newest rows. The
+ * same window is retained when another block follows or the message commits.
+ * ctrl+o shows the full block without a row limit.
  */
 export const THINKING_FOLD_ROWS = 3
-/** Height of a finished reasoning block: it leaves the transcript entirely. */
-export const THINKING_COLLAPSED_ROWS = 0
 
 // Transcript panels: a full-width filled slab with a blank padded row above
 // and below — pi's Box(paddingY=1, bg). The fill is what separates "input and
@@ -197,21 +193,19 @@ export function buildOutputBlocks(lines: OutputLine[], context: OutputContext | 
       }
 
       case 'thinking': {
-        // One reasoning block is laid out as a unit: every consecutive thinking
-        // line with the same fold policy is wrapped first, then the fold is
-        // applied to the visual rows, so the folded height is exact even when
-        // CJK or long lines wrap. Lines without a policy still form a run of
-        // one; they render exactly as before.
+        // Wrap each reasoning block as a unit before folding visual rows.
+        // Adjacent blocks must not share a window: otherwise the later tail
+        // would hide the earlier thought, including on a history rebuild.
         let end = index + 1
         while (
-          ol.thinkingFold !== undefined
-          && end < lines.length
+          end < lines.length
           && lines[end]!.kind === 'thinking'
+          && lines[end]!.thinkingBlockId === ol.thinkingBlockId
           && lines[end]!.thinkingFold === ol.thinkingFold
         ) end++
-        const run = lines.slice(index, end)
-        const thinking = buildThinkingBlock(run, prevKind !== 'thinking', initialContext.columns)
-        if (thinking) blocks.push(thinking)
+        const isBlockStart = prevKind !== 'thinking'
+          || (ol.thinkingBlockId !== undefined && ol.thinkingBlockId !== lines[index - 1]?.thinkingBlockId)
+        blocks.push(buildThinkingBlock(lines.slice(index, end), isBlockStart, initialContext.columns))
         index = end - 1
         break
       }
@@ -308,16 +302,12 @@ export function buildOutputBlocks(lines: OutputLine[], context: OutputContext | 
  * italic — dim italic on a dark terminal was barely legible, especially for
  * CJK. Continuations indent under the marker.
  *
- * Folds, applied to the visual rows after wrapping:
- *   tail      — over the budget while streaming: a header counting the rows
- *               above, then the newest rows, so the window scrolls in place
- *               like `tail -f` and the live region's height stays constant.
- *   collapsed — the block is finished: it renders nothing, so finished
- *               reasoning stops taking up the screen. The shrink from `tail`
- *               to nothing happens while the block is still in the
- *               repaintable live region above the footer.
+ * The compact tail fold applies after wrapping: a header counts the hidden
+ * rows, followed by the newest rows. It scrolls like `tail -f` while streaming
+ * and stays in place when finished, so subsequent output never pulls those
+ * rows away from the reader. Expanded blocks bypass the row budget.
  */
-function buildThinkingBlock(run: OutputLine[], isBlockStart: boolean, columns?: number): ViewBlock | undefined {
+function buildThinkingBlock(run: OutputLine[], isBlockStart: boolean, columns?: number): ViewBlock {
   const theme = getTheme()
   const avail = columns ? Math.max(1, columns - 2) : 0
   const rows: StyledSpan[] = []
@@ -334,7 +324,6 @@ function buildThinkingBlock(run: OutputLine[], isBlockStart: boolean, columns?: 
   const marginTop = isBlockStart ? 1 : 0
 
   const fold = run[0]?.thinkingFold
-  if (fold === 'collapsed') return undefined
   if (fold === undefined || rows.length <= THINKING_FOLD_ROWS) {
     return block(rows.map((body, k) => row(body, k === 0)), marginTop)
   }

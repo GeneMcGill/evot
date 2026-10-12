@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { buildAssistantLines, buildToolCard, buildUserMessage } from '../src/render/output.js'
+import { buildAssistantLines, buildThinkingLines, buildToolCard, buildUserMessage } from '../src/render/output.js'
 import { assistantMessageToOutputLines } from '../src/render/assistant.js'
 import { HistoryRenderCache } from '../src/term/viewmodel/history-cache.js'
 import { buildOutputBlocks, blocksToLines } from '../src/term/viewmodel/index.js'
@@ -36,10 +36,19 @@ function committedFrame(history: OutputLine[], content: UIAssistantBlock[]): str
 test('committing a partial message never changes a rendered row, whatever precedes it', () => {
   const restore = withColumns(COLUMNS)
   try {
-    const reply: UIAssistantBlock[] = [
-      { type: 'thinking', contentIndex: 0, text: 'weighing the options' },
-      { type: 'text', contentIndex: 1, text: '# Result\n\nThe answer is **42**.\n\n| a | b |\n|---|---|\n| 1 | 2 |' },
-    ]
+    const reasoning = Array.from({ length: 20 }, (_, i) => `reasoning row ${i + 1}`).join('\n\n')
+    const replies: Record<string, UIAssistantBlock[]> = {
+      shortThought: [{ type: 'thinking', contentIndex: 0, text: 'weighing the options' }],
+      longThought: [{ type: 'thinking', contentIndex: 0, text: reasoning }],
+      adjacentThoughts: [
+        { type: 'thinking', contentIndex: 0, text: reasoning },
+        { type: 'thinking', contentIndex: 1, text: 'next thought' },
+      ],
+      answered: [
+        { type: 'thinking', contentIndex: 0, text: reasoning },
+        { type: 'text', contentIndex: 1, text: '# Result\n\nThe answer is **42**.\n\n| a | b |\n|---|---|\n| 1 | 2 |' },
+      ],
+    }
     const histories: Record<string, OutputLine[]> = {
       afterUser: buildUserMessage('question'),
       afterTool: [...buildUserMessage('q'), ...buildToolCard({ id: 't', name: 'bash', status: 'done', args: { command: 'ls' }, result: 'a' })],
@@ -47,12 +56,73 @@ test('committing a partial message never changes a rendered row, whatever preced
       // assistant prose: the committed form joins the previous message with no
       // new block-start margin, so the live form must too.
       afterAssistant: [...buildUserMessage('q'), ...buildAssistantLines('first half of the reply')],
+      afterThought: buildThinkingLines('previous thought'),
       empty: [],
     }
     for (const [name, history] of Object.entries(histories)) {
-      expect(liveFrame(history, reply), name).toEqual(committedFrame(history, reply))
+      for (const [replyName, reply] of Object.entries(replies)) {
+        expect(liveFrame(history, reply), `${name}: ${replyName}`).toEqual(committedFrame(history, reply))
+      }
     }
   } finally {
+    restore()
+  }
+})
+
+test('the physical thinking window stays visible as the answer arrives and commits', async () => {
+  const restore = withColumns(COLUMNS)
+  const screen = new ScreenHarness(COLUMNS, 24)
+  const traces: RendererTraceEntry[] = []
+  const diagnostics: RendererDiagnostic[] = []
+  const renderer = new TermRenderer({
+    stdout: screen.stdout,
+    trace: entry => traces.push(entry),
+    onDiagnostic: diagnostic => diagnostics.push(diagnostic),
+  })
+  const history = buildUserMessage('q')
+  let content: UIAssistantBlock[] = [{
+    type: 'thinking', contentIndex: 0,
+    text: Array.from({ length: 20 }, (_, i) => `reasoning row ${i + 1}`).join('\n\n'),
+  }]
+  let committed = false
+  renderer.init()
+  renderer.setRenderCallback(() => ({
+    lines: [
+      ...(committed ? committedFrame(history, content) : liveFrame(history, content)),
+      `> ${CURSOR_MARKER}`, 'footer',
+    ],
+    bottomAnchor: true,
+  }))
+  const paint = async () => {
+    renderer.requestRender()
+    await Bun.sleep(25)
+    await screen.settle()
+  }
+  try {
+    await paint()
+    const thoughtRow = screen.rowOf('✻ ↑ 18 rows (ctrl+o)')
+    expect(thoughtRow).toBeGreaterThanOrEqual(0)
+    const thought = screen.viewport().slice(thoughtRow, thoughtRow + 3)
+    expect(thought).toEqual(['✻ ↑ 18 rows (ctrl+o)', '  reasoning row 19', '  reasoning row 20'])
+    traces.length = 0
+    diagnostics.length = 0
+
+    content = [...content, { type: 'text', contentIndex: 1, text: 'Visible answer' }]
+    await paint()
+    expect(screen.rowOf('✻ ↑ 18 rows (ctrl+o)')).toBe(thoughtRow)
+    expect(screen.viewport().slice(thoughtRow, thoughtRow + 3)).toEqual(thought)
+    expect(screen.rowOf('⏺ Visible answer')).toBeGreaterThan(thoughtRow + 2)
+    const answered = screen.viewport()
+
+    committed = true
+    await paint()
+    expect(screen.viewport()).toEqual(answered)
+    expect(diagnostics.filter(d => d.kind === 'stale_scrollback' || d.kind === 'full_redraw')).toEqual([])
+    const ansi = traces.flatMap(t => t.ansiWrites).join('')
+    expect(ansi).not.toContain('\x1b[3J')
+    expect(ansi).not.toContain('\x1b[2J')
+  } finally {
+    renderer.destroy()
     restore()
   }
 })
