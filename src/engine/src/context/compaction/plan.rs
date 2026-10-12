@@ -190,9 +190,15 @@ fn find_first_kept(
         }
         accumulated += tokens;
         if accumulated >= keep_recent_tokens {
-            // Fall back to the first valid cut when none exists at or after
-            // the message that crossed the budget.
-            candidate = snap_forward_from(messages, i).unwrap_or(first_cut);
+            // No valid cut at or after the message that crossed the budget
+            // means it sits in the final tool batch. Keep that whole batch by
+            // cutting at the assistant that issued it: retaining more than the
+            // budget still evicts everything before, whereas falling back to
+            // the first cut keeps the entire history and compacts nothing —
+            // for as long as the newest tool result alone exceeds the budget.
+            candidate = snap_forward_from(messages, i)
+                .or_else(|| snap_backward_from(messages, boundary, i))
+                .unwrap_or(first_cut);
             break;
         }
     }
@@ -211,6 +217,14 @@ fn snap_forward_from(messages: &[&AgentMessage], start: usize) -> Option<usize> 
         .iter()
         .position(|message| is_valid_cut_point(message))
         .map(|offset| start + offset)
+}
+
+/// Nearest valid cut point before `end`, not before `boundary`; `None` when
+/// that would evict nothing.
+fn snap_backward_from(messages: &[&AgentMessage], boundary: usize, end: usize) -> Option<usize> {
+    (boundary + 1..end)
+        .rev()
+        .find(|&i| is_valid_cut_point(messages[i]))
 }
 
 fn is_valid_cut_point(msg: &AgentMessage) -> bool {

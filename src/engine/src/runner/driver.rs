@@ -627,6 +627,45 @@ async fn run_loop(
         .await
         .ok();
 
+        // A tool turn that has grown the active context to the summary
+        // threshold compacts here, before the next provider call, instead of
+        // waiting for run end or a provider overflow. Threshold compaction
+        // never asks for a retry; the fresh tool results stay in context.
+        // Below the line the controller only sees the usage, which re-arms
+        // threshold compaction after a previous one.
+        if has_tool_calls && !cancel.is_cancelled() {
+            if super::compaction_check::tool_turn_needs_compaction_check(
+                &compaction_controller,
+                &context_tracker,
+                &context.messages,
+            ) {
+                check_compaction(
+                    &mut compaction_controller,
+                    &mut context_tracker,
+                    &mut context.messages,
+                    CompactionCheckInput {
+                        assistant_message: &message,
+                        config,
+                        request_shape: CompactionRequestShape {
+                            system_prompt: &context.system_prompt,
+                            tools: &tool_defs,
+                            prompt_cache_key: context.prompt_cache_key.as_deref(),
+                        },
+                        phase: CompactionCheckPhase::ToolTurn,
+                    },
+                    cancel.clone(),
+                    tx,
+                )
+                .await;
+            } else {
+                super::compaction_check::note_tool_turn_usage(
+                    &mut compaction_controller,
+                    config,
+                    &message,
+                );
+            }
+        }
+
         // Continue the current run while tool work or steering remains.
         if let Some(steering) = steering_after_tools.take() {
             if !steering.is_empty() {

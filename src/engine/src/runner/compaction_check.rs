@@ -66,6 +66,11 @@ impl CompactionRequestShape<'_> {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum CompactionCheckPhase {
     BeforePrompt,
+    /// Between tool turns of one run, once the local estimate says the
+    /// active context has reached the summary threshold. Without this a
+    /// tool-heavy run only compacts when the provider rejects the request,
+    /// which a large-window model or a lenient gateway may never do.
+    ToolTurn,
     RunEnd,
 }
 
@@ -79,8 +84,9 @@ pub(super) struct CompactionCheckInput<'a> {
 /// Apply pi's single response-driven compaction policy.
 ///
 /// Run-end checks ignore aborted responses. Before a new explicit prompt, the
-/// same response is checked again with aborted usage included. Internal tool,
-/// steering, retry, and follow-up turns never invoke this function.
+/// same response is checked again with aborted usage included. Tool turns
+/// invoke it only through [`tool_turn_needs_compaction_check`]; steering,
+/// retry, and follow-up turns never do.
 pub(super) async fn check_compaction(
     controller: &mut Option<CompactionController>,
     tracker: &mut ContextTracker,
@@ -151,7 +157,7 @@ pub(super) async fn check_compaction(
     // takes over unless an explicit fallback was configured.
     let checkpoint = match phase {
         CompactionCheckPhase::RunEnd => Checkpoint::RunEnd,
-        CompactionCheckPhase::BeforePrompt => Checkpoint::MidRun,
+        CompactionCheckPhase::BeforePrompt | CompactionCheckPhase::ToolTurn => Checkpoint::MidRun,
     };
     let remote_ctx = request_shape.summarizer_context(config);
     let llm_ctx = config.compaction_context.as_ref().unwrap_or(&remote_ctx);
@@ -183,10 +189,17 @@ pub(super) async fn check_compaction(
     // so a model switch cannot compact against the old model's boundary.
     // Any response the trigger already classified (overflow, exhausted, failed
     // recovery) must not re-enter through the estimate fallback.
+    //
+    // A tool turn always takes the anchor path when usage alone did not act:
+    // the response's usage predates the tool results just appended, and the
+    // anchor adds those trailing messages, so the summary happens before the
+    // oversized request is sent instead of one turn later.
     let anchor_estimate = if response.action == AfterResponseAction::Continue
         && response.stats.is_none()
         && response.reason.is_none()
-        && (usage_rejected || needs_usage_anchor_estimate(assistant_message))
+        && (usage_rejected
+            || phase == CompactionCheckPhase::ToolTurn
+            || needs_usage_anchor_estimate(assistant_message))
     {
         Some(
             tracker
@@ -294,6 +307,52 @@ async fn emit_compaction_events(
         .await
         .ok();
     }
+}
+
+/// Whether a tool turn should run the compaction check before the next
+/// provider call: the active context plus request overhead, by the local
+/// byte heuristic, has reached the mid-run summary threshold. The heuristic
+/// overcounts, so this fires early and the usage-driven check decides; below
+/// the line the turn continues without touching the controller.
+pub(super) fn tool_turn_needs_compaction_check(
+    controller: &Option<CompactionController>,
+    tracker: &ContextTracker,
+    messages: &[AgentMessage],
+) -> bool {
+    let Some(ctrl) = controller.as_ref() else {
+        return false;
+    };
+    let config = ctrl.config();
+    if config.context_window == 0 {
+        return false;
+    }
+    let local_estimate =
+        total_tokens(messages).saturating_add(tracker.system_tool_overhead_tokens());
+    local_estimate >= config.trigger_threshold()
+}
+
+/// A tool turn below the threshold still shows the controller its usage: a
+/// compaction suppresses further threshold compactions until usage is seen
+/// back under the line, and without this the next time the context grows to
+/// the threshold the check would be refused as "did not lower usage".
+pub(super) fn note_tool_turn_usage(
+    controller: &mut Option<CompactionController>,
+    config: &AgentLoopConfig,
+    assistant_message: &Message,
+) {
+    let Some(ctrl) = controller.as_mut() else {
+        return;
+    };
+    let Some(usage) = usage_snapshot_from_message(assistant_message) else {
+        return;
+    };
+    let current_model = ModelId {
+        provider: target_provider(config)
+            .unwrap_or(&usage.model.provider)
+            .to_string(),
+        model: config.model.clone(),
+    };
+    ctrl.clear_suppression_if_recovered(&usage, &current_model);
 }
 
 fn target_provider(config: &AgentLoopConfig) -> Option<&str> {

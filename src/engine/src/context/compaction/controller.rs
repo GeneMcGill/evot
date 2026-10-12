@@ -314,13 +314,18 @@ impl CompactionController {
                 // Cancellation or no plan leaves the turn terminal instead
                 // of resending the same oversized context.
                 let request_overhead_tokens = contexts.request_overhead_tokens();
+                let minimum_first_kept = if will_retry {
+                    self.overflow_minimum_first_kept(messages, request_overhead_tokens)
+                } else {
+                    0
+                };
                 let mut stats = self
                     .summarize_compaction(
                         messages,
                         contexts,
                         request_overhead_tokens,
                         LlmPolicy::Required,
-                        0,
+                        minimum_first_kept,
                         cancel.clone(),
                     )
                     .await;
@@ -336,7 +341,7 @@ impl CompactionController {
                             SummaryContexts::default(),
                             request_overhead_tokens,
                             LlmPolicy::Skip,
-                            0,
+                            minimum_first_kept,
                             cancel.clone(),
                         )
                         .await;
@@ -514,6 +519,37 @@ impl CompactionController {
         response
     }
 
+    /// Where an overflow retry's plan must start keeping messages. The
+    /// ordinary plan keeps the final tool batch whole; when that batch by
+    /// itself still fills the window the provider would reject the retry
+    /// again, so the whole active turn is summarized instead (pi's ordinary
+    /// planner never cuts at a tool result). Unknown windows keep the
+    /// ordinary plan: there is no size to judge the retained tail against.
+    fn overflow_minimum_first_kept(
+        &self,
+        messages: &[AgentMessage],
+        request_overhead_tokens: usize,
+    ) -> usize {
+        if self.config.context_window == 0
+            || !matches!(
+                messages.last(),
+                Some(AgentMessage::Llm(crate::types::Message::ToolResult { .. }))
+            )
+        {
+            return 0;
+        }
+        let retained_tail = self.config.retained_tail_budget(request_overhead_tokens);
+        let Some(plan) = plan::plan_messages(messages, retained_tail) else {
+            return 0;
+        };
+        let kept = total_tokens(&messages[plan.first_kept..]);
+        if kept.saturating_add(request_overhead_tokens) >= self.config.trigger_threshold() {
+            messages.len()
+        } else {
+            0
+        }
+    }
+
     /// Force a compaction (e.g., manual trigger from user command).
     pub async fn force_compact(
         &mut self,
@@ -661,7 +697,11 @@ impl CompactionController {
 
     /// Post-compaction usage back under the threshold re-arms threshold
     /// compaction. Stale usage (predating the last compaction) is ignored.
-    fn clear_suppression_if_recovered(&mut self, usage: &UsageSnapshot, current_model: &ModelId) {
+    pub fn clear_suppression_if_recovered(
+        &mut self,
+        usage: &UsageSnapshot,
+        current_model: &ModelId,
+    ) {
         if self.config.context_window == 0 || usage.model != *current_model {
             return;
         }

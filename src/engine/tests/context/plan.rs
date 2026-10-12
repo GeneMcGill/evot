@@ -290,9 +290,13 @@ fn messages_overflow_fallback_can_evict_the_entire_unsplittable_tail() {
         tool_result(&big(20_000)),
     ];
 
-    // The normal pi-style plan cannot cut after the final ToolResult, so it
-    // retains the same oversized turn and has nothing to summarize.
-    assert!(evotengine::context::plan_messages(&messages, 100).is_none());
+    // The normal plan cannot cut after the final ToolResult, so it keeps the
+    // whole oversized tool batch and can only evict what precedes it.
+    let plan = match evotengine::context::plan_messages(&messages, 100) {
+        Some(plan) => plan,
+        None => panic!("the prompt before the tool batch is still evictable"),
+    };
+    assert_eq!(plan.first_kept, 1);
 
     // Once the provider has rejected that request, overflow recovery may evict
     // the whole active turn. Keeping no verbatim suffix is preferable to
@@ -305,6 +309,34 @@ fn messages_overflow_fallback_can_evict_the_entire_unsplittable_tail() {
     assert_eq!(plan.summarize, 0..messages.len());
     assert_eq!(plan.first_kept, messages.len());
     assert!(plan.turn_prefix.is_none());
+}
+
+#[test]
+fn messages_plan_keeps_the_final_tool_batch_when_its_result_exceeds_the_budget() {
+    // A tool-heavy run whose newest result alone is bigger than the retained
+    // budget: snapping forward from it finds no cut, so the planner must cut
+    // at the assistant that issued the batch instead of keeping everything.
+    let mut messages = vec![user("do the work")];
+    for i in 0..5 {
+        messages.push(tool_call("bash", &format!("step{i}")));
+        messages.push(tool_result(&big(2_000)));
+    }
+
+    let plan = match evotengine::context::plan_messages(&messages, 100) {
+        Some(plan) => plan,
+        None => panic!("earlier tool turns must be evictable"),
+    };
+    assert_eq!(
+        plan.first_kept,
+        messages.len() - 2,
+        "retain exactly the final tool call and its result"
+    );
+    assert!(matches!(
+        &messages[plan.first_kept],
+        AgentMessage::Llm(Message::Assistant { .. })
+    ));
+    assert!(plan.split_turn.is_some());
+    assert_eq!(plan.turn_prefix, Some(0..messages.len() - 2));
 }
 
 #[test]

@@ -22,6 +22,12 @@ pub enum MockResponse {
         calls: Vec<MockToolCall>,
         stop_reason: StopReason,
     },
+    /// Tool calls with the provider's own token count, as real providers
+    /// report it on tool-use responses.
+    ToolCallsWithUsage {
+        calls: Vec<MockToolCall>,
+        usage: Usage,
+    },
     TextWithUsageAndStop {
         text: String,
         usage: Usage,
@@ -111,10 +117,13 @@ impl StreamProvider for MockProvider {
                 model,
             } => build_text_response(text, usage, stop_reason, model, &tx),
             MockResponse::ToolCalls(calls) => {
-                build_tool_call_response(calls, StopReason::ToolUse, &tx)
+                build_tool_call_response(calls, StopReason::ToolUse, Usage::default(), &tx)
             }
             MockResponse::ToolCallsWithStop { calls, stop_reason } => {
-                build_tool_call_response(calls, stop_reason, &tx)
+                build_tool_call_response(calls, stop_reason, Usage::default(), &tx)
+            }
+            MockResponse::ToolCallsWithUsage { calls, usage } => {
+                build_tool_call_response(calls, StopReason::ToolUse, usage, &tx)
             }
         };
 
@@ -128,6 +137,7 @@ impl StreamProvider for MockProvider {
 fn build_tool_call_response(
     calls: Vec<MockToolCall>,
     stop_reason: StopReason,
+    usage: Usage,
     tx: &mpsc::UnboundedSender<StreamEvent>,
 ) -> Message {
     let content = calls
@@ -160,7 +170,7 @@ fn build_tool_call_response(
         stop_reason,
         model: "mock".into(),
         provider: "mock".into(),
-        usage: Usage::default(),
+        usage,
         timestamp: now_ms(),
         error_message: None,
         response_id: None,

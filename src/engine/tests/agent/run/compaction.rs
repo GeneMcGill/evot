@@ -1464,6 +1464,140 @@ async fn test_no_usage_anchor_below_threshold_does_not_compact() {
         .any(|event| matches!(event, AgentEvent::LlmCallStart { .. })));
 }
 
+#[tokio::test]
+async fn test_tool_heavy_run_compacts_between_tool_turns() {
+    use evotengine::context::ContextConfig;
+
+    // A single run issuing tool call after tool call, each result ~500 tokens,
+    // against a 1,100-token window whose provider reports its token count
+    // like a real one and never rejects a request. The run must compact as
+    // soon as the context reaches the threshold, and again once it has grown
+    // back to it, instead of waiting for run end or a provider overflow.
+    //
+    // The provider answers a few milliseconds late so every response carries
+    // a timestamp after the compaction that preceded it; stale usage is
+    // ignored by design and would otherwise hide the second compaction.
+    struct LateMock(MockProvider);
+
+    #[async_trait::async_trait]
+    impl StreamProvider for LateMock {
+        async fn stream(
+            &self,
+            config: StreamConfig,
+            tx: tokio::sync::mpsc::UnboundedSender<StreamEvent>,
+            cancel: tokio_util::sync::CancellationToken,
+        ) -> Result<StreamOutcome, ProviderError> {
+            tokio::time::sleep(std::time::Duration::from_millis(3)).await;
+            self.0.stream(config, tx, cancel).await
+        }
+    }
+
+    // Distinct arguments keep the doom-loop detector out of the picture; the
+    // usage is what the provider saw as input for that call.
+    let call = |tool: &str, n: usize, input: u64| MockResponse::ToolCallsWithUsage {
+        calls: vec![MockToolCall {
+            name: tool.into(),
+            arguments: serde_json::json!({ "n": n }),
+        }],
+        usage: Usage {
+            input,
+            output: 10,
+            ..Default::default()
+        },
+    };
+    let mut config = make_config(MockProvider::text("unused"));
+    config.provider = std::sync::Arc::new(LateMock(MockProvider::new(vec![
+        call("dump", 1, 40),
+        call("dump", 2, 560),
+        // Consumed by the summarizer after the second tool result.
+        MockResponse::Text("summary".into()),
+        // A small step right after the compaction: its usage shows the
+        // context back under the line, which re-arms threshold compaction.
+        call("peek", 3, 600),
+        // The provider counts more tokens than the byte heuristic does, so by
+        // the time the local estimate reaches the line its usage is already
+        // past it. That must still compact rather than being refused as a
+        // repeat of the previous compaction.
+        call("dump", 4, 1_000),
+        MockResponse::Text("summary 2".into()),
+        MockResponse::Text("all done".into()),
+    ])));
+    config.context_config = Some(ContextConfig {
+        max_context_tokens: 1_100,
+        system_prompt_tokens: 0,
+        advertised_context_window: None,
+        reserve_tokens: Some(137),
+        trigger_tokens: None,
+        keep_recent_tokens: Some(220),
+    });
+    let mut context = AgentContext {
+        system_prompt: "test".into(),
+        messages: Vec::new(),
+        tools: vec![
+            Box::new(MockTool::ok("dump", &"x".repeat(2_000))),
+            Box::new(MockTool::ok("peek", "ok")),
+        ],
+        cwd: std::path::PathBuf::new(),
+        path_guard: std::sync::Arc::new(evotengine::PathGuard::open()),
+        prompt_cache_key: None,
+    };
+    let (tx, rx) = mpsc::unbounded_channel();
+    agent_loop(
+        vec![AgentMessage::Llm(Message::user("dump everything"))],
+        &mut context,
+        &config,
+        tx,
+        CancellationToken::new(),
+    )
+    .await;
+    let events = collect_events(rx);
+
+    let compaction_ends: Vec<usize> = events
+        .iter()
+        .enumerate()
+        .filter(|(_, event)| matches!(event, AgentEvent::ContextCompactionEnd { .. }))
+        .map(|(index, _)| index)
+        .collect();
+    assert_eq!(
+        compaction_ends.len(),
+        2,
+        "a second threshold compaction must follow once usage recovered"
+    );
+    let final_text_index = events
+        .iter()
+        .position(|event| matches!(
+            event,
+            AgentEvent::MessageEnd { message: AgentMessage::Llm(Message::Assistant { content, .. }) }
+                if content.iter().any(|block| matches!(block, Content::Text { text } if text == "all done"))
+        ))
+        .expect("the run must still finish");
+    assert!(
+        compaction_ends
+            .iter()
+            .all(|&index| index < final_text_index),
+        "compaction must happen before the run ends, not at run end"
+    );
+    // Threshold compaction mid-run keeps the fresh tool results and never
+    // claims an overflow retry.
+    assert!(events.iter().all(
+        |event| !matches!(event, AgentEvent::ContextCompactionStarted {
+            will_retry: true,
+            ..
+        })
+    ));
+    let tool_results = events
+        .iter()
+        .filter(|event| matches!(event, AgentEvent::ToolExecutionEnd { .. }))
+        .count();
+    assert_eq!(
+        tool_results, 4,
+        "every tool call still executes exactly once"
+    );
+    assert!(events
+        .iter()
+        .all(|event| !matches!(event, AgentEvent::Error { .. })));
+}
+
 fn assistant_msg_for_test(text: &str) -> AgentMessage {
     AgentMessage::Llm(Message::Assistant {
         content: vec![Content::Text { text: text.into() }],
