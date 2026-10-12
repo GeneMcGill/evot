@@ -47,7 +47,7 @@ export function buildShellFrame(input: ShellSnapshot): RenderFrame {
     }))
     return {
       ...base,
-      lines: [...contentLines, ...preEditorLines, ...selectorLines, ...promptLines],
+      lines: contentLines.concat(preEditorLines, selectorLines, promptLines),
       transientRows: selectorLines.length,
     }
   }
@@ -60,7 +60,7 @@ export function buildShellFrame(input: ShellSnapshot): RenderFrame {
       : { ...prompt, backgroundPanelDownAvailable: false }
     return {
       ...base,
-      lines: [...contentLines, ...preEditorLines, ...surfaceLines, ...blocksToLines(buildPromptFooterBlocks(footerPrompt))],
+      lines: contentLines.concat(preEditorLines, surfaceLines, blocksToLines(buildPromptFooterBlocks(footerPrompt))),
       transientRows: surfaceLines.length,
     }
   }
@@ -77,7 +77,7 @@ export function buildShellFrame(input: ShellSnapshot): RenderFrame {
   }))
   return {
     ...base,
-    lines: [...contentLines, ...preEditorLines, ...previewLines, ...promptLines],
+    lines: contentLines.concat(preEditorLines, previewLines, promptLines),
     transientRows: previewLines.length,
     ...(modalLines.length > 0 ? { overlay: { lines: modalLines } } : {}),
   }

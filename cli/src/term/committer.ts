@@ -14,11 +14,42 @@ export interface CommitterDeps {
   invalidateHistory: () => void
 }
 
+/**
+ * Upper bound on the rows either view keeps for redraws.
+ *
+ * The renderer repaints only the viewport, but a resize or an invalidated
+ * prefix replays these arrays into the terminal, and the render cache holds a
+ * flattened copy of every row. Unbounded, a long tool-heavy session kept its
+ * entire scrollback three times over (lines, expanded lines, caches), with the
+ * expanded view carrying every tool result in full. The screen log and the
+ * session transcript keep the complete history.
+ */
+export const MAX_HISTORY_LINES = 20_000
+/** Rows dropped per trim beyond the bound, so the full rebuild it costs is rare. */
+const TRIM_BATCH = 4_000
+
 export class Committer {
   /** Reveals still waiting to be erased. Held so shutdown cannot leave one dangling. */
   private readonly pendingReveals = new Set<ReturnType<typeof setTimeout>>()
 
   constructor(private readonly deps: CommitterDeps) {}
+
+  /** Drop the oldest rows of any view past the bound; the render cache rebuilds. */
+  private trim(): void {
+    let trimmed = false
+    for (const list of [this.deps.compactLines, this.deps.expandedLines]) {
+      if (list.length <= MAX_HISTORY_LINES) continue
+      // An earlier notice sits at index 0 and goes with the dropped rows.
+      const drop = list.length - MAX_HISTORY_LINES + TRIM_BATCH
+      list.splice(0, drop, {
+        id: 'history-trimmed',
+        kind: 'system',
+        text: `… earlier output no longer kept on screen; the session log has it (/log)`,
+      })
+      trimmed = true
+    }
+    if (trimmed) this.deps.invalidateHistory()
+  }
 
   /** Block layout only needs the line it follows, so history is never copied. */
   private contextAfter(previous: OutputLine | undefined): { prevKind?: string; columns?: number } {
@@ -27,8 +58,9 @@ export class Committer {
 
   restore(lines: OutputLine[], expandedLines: OutputLine[] = lines): void {
     if (lines.length === 0 && expandedLines.length === 0) return
-    this.deps.compactLines.push(...lines)
-    this.deps.expandedLines.push(...expandedLines)
+    appendAll(this.deps.compactLines, lines)
+    appendAll(this.deps.expandedLines, expandedLines)
+    this.trim()
     this.deps.requestRender()
   }
 
@@ -44,8 +76,9 @@ export class Committer {
   commitDual(compact: OutputLine[], expanded: OutputLine[]): void {
     if (!compact.length && !expanded.length) return
     const previous = this.deps.compactLines.at(-1)
-    this.deps.compactLines.push(...compact)
-    this.deps.expandedLines.push(...expanded)
+    appendAll(this.deps.compactLines, compact)
+    appendAll(this.deps.expandedLines, expanded)
+    this.trim()
     this.paint(this.deps.isExpanded() ? expanded : compact, previous)
   }
 
@@ -80,8 +113,9 @@ export class Committer {
    */
   commitUnlogged(lines: OutputLine[]): void {
     if (lines.length === 0) return
-    this.deps.compactLines.push(...lines)
-    this.deps.expandedLines.push(...lines)
+    appendAll(this.deps.compactLines, lines)
+    appendAll(this.deps.expandedLines, lines)
+    this.trim()
     this.deps.requestRender()
   }
 
@@ -148,4 +182,10 @@ export class Committer {
     this.deps.logLines(blocksToLines(blocks))
     this.deps.requestRender()
   }
+}
+
+/** `push(...items)` without the spread: a restored transcript can exceed the
+ *  engine's argument limit. */
+function appendAll(target: OutputLine[], items: OutputLine[]): void {
+  for (const item of items) target.push(item)
 }

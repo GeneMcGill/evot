@@ -10,6 +10,7 @@ import type { UIMessage, UIAssistantBlock, RunStats, VerboseEvent, AskUserReques
 // ---------------------------------------------------------------------------
 
 export interface AppState {
+  /** Newest completed assistant messages only; see `MAX_RETAINED_MESSAGES`. */
   messages: UIMessage[]
   isLoading: boolean
   sessionId: string | null

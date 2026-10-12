@@ -1019,6 +1019,32 @@ describe('TermRenderer', () => {
       renderer.destroy()
     })
 
+    test('committed rows reuse their finalized text when the producer string is unchanged', async () => {
+      const { renderer, stdout } = createRenderer()
+      renderer.init()
+      const history = ['a\tb', 'plain', 'c\td']
+      let live = `edit${CURSOR_MARKER}`
+      renderer.setRenderCallback(() => ({ lines: history.concat([live]), committedRows: history.length }))
+      await renderFrame(renderer)
+      stdout.clear()
+
+      // Only the live row changes; history keeps the same string objects.
+      live = `edited${CURSOR_MARKER}`
+      await renderFrame(renderer)
+      expect(stripAnsi(stdout.output)).toContain('edited')
+      expect(stdout.output).not.toContain('a   b')
+      expect(stdout.output).not.toContain(CURSOR_MARKER)
+
+      // A changed committed row is finalized again (tabs normalized, reset
+      // appended) and repainted.
+      stdout.clear()
+      history[1] = 'x\ty'
+      await renderFrame(renderer)
+      expect(stdout.output).not.toContain('\t')
+      expect(stdout.output).toContain('x   y\x1b[0m\x1b]8;;\x07')
+      renderer.destroy()
+    })
+
     test('pi APC cursor marker is zero-width and removed before paint', async () => {
       const { renderer, stdout } = createRenderer()
       renderer.init()

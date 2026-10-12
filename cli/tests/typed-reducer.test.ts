@@ -1,7 +1,7 @@
 import { buildToolCard } from '../src/render/output.js'
 import { describe, expect, test } from 'bun:test'
 import { decodeQueryEvent, isHostToolEvent } from '../src/native/contracts/query-event.js'
-import { applyEvent } from '../src/term/app/reducer.js'
+import { applyEvent, MAX_RETAINED_MESSAGES } from '../src/term/app/reducer.js'
 import { createInitialState } from '../src/term/app/state.js'
 import { assistantToolCalls } from '../src/term/app/assistant-content.js'
 import { createStreamMachineState, reduceRunEvent } from '../src/term/app/stream.js'
@@ -106,6 +106,18 @@ describe('typed run reducer', () => {
       })
       expect(assistantToolCalls(state.currentAssistantContent)[0]?.args).toEqual({})
     }
+  })
+
+  test('completed messages are retained as a bounded tail with the newest last', () => {
+    let state = createInitialState('model', '/tmp')
+    for (let i = 0; i < MAX_RETAINED_MESSAGES + 5; i++) {
+      state = apply(state, 'assistant_completed', {
+        content: [{ type: 'text', text: `answer ${i}` }], stop_reason: 'end_turn',
+      })
+    }
+    expect(state.messages).toHaveLength(MAX_RETAINED_MESSAGES)
+    expect(state.messages.at(-1)?.text).toBe(`answer ${MAX_RETAINED_MESSAGES + 4}`)
+    expect(state.messages[0]?.text).toBe('answer 5')
   })
 
   test('unknown events are inert and optional usage defaults remain zero', () => {

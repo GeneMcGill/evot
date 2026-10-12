@@ -34,6 +34,7 @@ import type { UIAssistantBlock } from './app/types.js'
 import { assistantMessageToOutputLines } from '../render/assistant.js'
 import { HistoryManager } from '../session/history.js'
 import { ScreenLog } from './diagnostics/screen-log.js'
+import { formatMemoryLine, memorySnapshot } from './diagnostics/memory.js'
 import { SessionHook } from '../session/hook.js'
 import { RendererTrace } from './diagnostics/renderer-trace.js'
 import { findLastAssistantMarkdown, findLastAssistantTurn } from '../session/assistant-markdown.js'
@@ -1671,13 +1672,9 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
     // An overlay owns the screen, so hold the caret solid rather than
     // animating behind a modal.
 
-    const blocks: ViewBlock[] = []
-
     // 1. Banner
     const banner = currentBannerText()
-    if (banner) {
-      blocks.push({ lines: banner.split('\n').map(l => ({ spans: [{ text: l }] })), marginTop: 0 })
-    }
+    const bannerLines = banner ? banner.split('\n') : []
 
     // 2. History (committed output lines) — incrementally cached so the
     // high-frequency spinner/delta/keystroke renders skip re-flattening the
@@ -1690,7 +1687,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
     }
     const cache = expanded ? expandedHistoryCache : compactHistoryCache
     const cachedHistoryLines = cache.sync(expanded ? expandedLines : compactLines, cols)
-    const bannerRows = blocksToLines(blocks).length
+    const bannerRows = bannerLines.length
     // Rows above this index are committed transcript; render diagnostics use it
     // to attribute a repaint to history, the live partial, or the live region.
     historyRowCount = bannerRows + cachedHistoryLines.length
@@ -1705,18 +1702,14 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
     committedBannerRows = bannerRows
     committedHistoryRows = cachedHistoryLines.length
     committedPrefixMayReshape = false
-    if (cachedHistoryLines.length > 0) {
-      blocks.push({ lines: cachedHistoryLines.map(l => ({ spans: [{ text: l }] })), marginTop: 0 })
-    }
 
     // 3. Ordered partial assistant message (thinking/text/tool calls). Markdown
     // prefixes can legitimately reparse into fewer rows as a fence/list/table
     // becomes complete. Track history + partial as one region: when completion
     // moves the same content from partial into history its total height remains
     // continuous, and any transient parser shrink is absorbed above the footer.
-    const partialBlocks = buildPartialAssistantBlocks(cache.trailingKind)
-    blocks.push(...partialBlocks)
-    const livePartialHeight = blocksToLines(partialBlocks).length
+    const partialLines = blocksToLines(buildPartialAssistantBlocks(cache.trailingKind))
+    const livePartialHeight = partialLines.length
     const liveContentHeight = cachedHistoryLines.length + livePartialHeight
     // The monotonic-height guard is only needed while visible partial content is
     // being reparsed. At the start of a fresh LLM call currentAssistantContent is
@@ -1728,14 +1721,16 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
       isLoading && livePartialHeight > 0,
     )
     liveContentMaxHeight = liveHeight.maxHeight
-    if (liveHeight.padding > 0) {
-      blocks.push({
-        lines: Array.from({ length: liveHeight.padding }, () => ({ spans: [{ text: '' }] })),
-        marginTop: 0,
-      })
-    }
+    const paddingLines: string[] = liveHeight.padding > 0
+      ? new Array<string>(liveHeight.padding).fill('')
+      : []
 
-    const latestContentLines = blocksToLines(blocks)
+    // The cached history is already flattened ANSI; it joins the frame as-is.
+    // Re-wrapping it in spans and re-flattening every frame costs three
+    // allocations and a fresh string per transcript row, which in a long
+    // session is tens of milliseconds and hundreds of MB/s of garbage. The
+    // renderer reuses the same string objects to skip finalizing those rows.
+    const latestContentLines = bannerLines.concat(cachedHistoryLines, partialLines, paddingLines)
     const commandWindowIsMounted = commandWindowMounted()
     if (
       commandWindowIsMounted
@@ -1893,6 +1888,17 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
     const line = buildRunFooterLine(runStartedAt, Date.now(), runTurnCount, runThinking.finish())
     runStartedAt = null
     if (line) commitLines([line])
+    // One memory line per run in the screen log: a report of a bloated
+    // process then comes with the trend and what this client retained.
+    screenLog.logLines([memoryLine()])
+  }
+
+  function memoryLine(): string {
+    return formatMemoryLine(memorySnapshot({
+      compactRows: compactLines.length,
+      expandedRows: expandedLines.length,
+      messages: appState.messages.length,
+    }))
   }
 
   /**
@@ -3442,6 +3448,8 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
         planModeItems = []
         commitSystem('sys-act', '  planning: off')
       }
+    } else if (name === '/_mem') {
+      commitSystem('sys-mem', `  ${memoryLine()}`)
     } else if (name === '/_dump') {
       try {
         const outcome = await agent.submit(

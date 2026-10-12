@@ -135,6 +135,16 @@ export class TermRenderer {
   private pendingTraceWrites: string[] = []
   private frameNumber = 0
   private previousLines: string[] = []
+  /**
+   * Producer lines of the painted frame, parallel to `previousLines`. A
+   * committed row whose producer string is the very same object as last frame
+   * reuses its finalized text: history is append-only by contract, so the
+   * transcript prefix costs nothing per frame instead of a marker scan, a tab
+   * normalization and a fresh string per row.
+   */
+  private previousSourceLines: string[] = []
+  /** Producer lines of the frame being finalized, adopted with `previousLines`. */
+  private pendingSourceLines: string[] = []
   private previousWidth = 0
   private previousHeight = 0
   private hardwareCursorRow = 0
@@ -250,6 +260,7 @@ export class TermRenderer {
     if (this.destroyed) return
     if (force) {
       this.previousLines = []
+      this.previousSourceLines = []
       this.previousWidth = -1
       this.previousHeight = -1
       this.hardwareCursorRow = 0
@@ -288,6 +299,7 @@ export class TermRenderer {
   clearScreen(): void {
     this.write(SYNC_START + CLEAR_SCREEN_AND_SCROLLBACK + SYNC_END)
     this.previousLines = []
+    this.previousSourceLines = []
     this.hardwareCursorRow = 0
     this.maxLinesRendered = 0
     this.previousViewportTop = 0
@@ -391,11 +403,20 @@ export class TermRenderer {
     }
     // Before the first natural bottom contact, short frames retain their normal
     // flow position. Screen overlays still do their own temporary composition.
-    let newLines = rendered.overlay
-      ? this.compositeOverlay(baseLines.map(line => line.replaceAll(CURSOR_MARKER, '')), rendered.overlay, width, height)
-      : baseLines
-    const cursorPos = this.extractCursorPosition(newLines, height)
-    newLines = this.applyLineResets(newLines)
+    // Rows committed in both frames may reuse last frame's finalized text.
+    // Nothing is reusable under an overlay: composition rewrites the viewport.
+    const reusableRows = rendered.overlay
+      ? 0
+      : Math.min(committedRows, previousCommittedRows, baseLines.length, this.previousLines.length)
+    const finalized = rendered.overlay
+      ? this.finalizeLines(
+          this.compositeOverlay(baseLines.map(line => line.replaceAll(CURSOR_MARKER, '')), rendered.overlay, width, height),
+          0,
+          height,
+        )
+      : this.finalizeLines(baseLines, reusableRows, height)
+    const newLines = finalized.lines
+    const cursorPos = finalized.cursor
 
     // Soft overwide-line guard: DECAWM is off, so overflows are silent. When
     // tracing or EVOT_DEBUG=1, surface them so layout bugs are not invisible.
@@ -509,7 +530,7 @@ export class TermRenderer {
       this.maxLinesRendered = clear ? newLines.length : Math.max(this.maxLinesRendered, newLines.length)
       const bufferLength = Math.max(height, newLines.length)
       this.previousViewportTop = Math.max(0, bufferLength - height)
-      this.previousLines = newLines
+      this.adoptFrame(newLines)
       this.previousWidth = width
       this.previousHeight = height
       this.scrollbackStaleFrom = null
@@ -648,7 +669,7 @@ export class TermRenderer {
     // currently produces rather than re-reporting the same stale rows.
     if (firstChanged === -1) {
       this.positionHardwareCursor(cursorPos, newLines.length)
-      this.previousLines = newLines
+      this.adoptFrame(newLines)
       this.previousWidth = width
       this.previousViewportTop = prevViewportTop
       this.previousHeight = height
@@ -689,7 +710,7 @@ export class TermRenderer {
         this.hardwareCursorRow = targetRow
       }
       this.positionHardwareCursor(cursorPos, newLines.length)
-      this.previousLines = newLines
+      this.adoptFrame(newLines)
       this.previousWidth = width
       this.previousHeight = height
       this.previousViewportTop = prevViewportTop
@@ -764,7 +785,7 @@ export class TermRenderer {
     this.hardwareCursorRow = finalCursorRow
     this.maxLinesRendered = Math.max(this.maxLinesRendered, newLines.length)
     this.previousViewportTop = Math.max(prevViewportTop, finalCursorRow - height + 1)
-    this.previousLines = newLines
+    this.adoptFrame(newLines)
     this.previousWidth = width
     this.previousHeight = height
     this.positionHardwareCursor(cursorPos, newLines.length)
@@ -810,28 +831,51 @@ export class TermRenderer {
     return result
   }
 
-  private applyLineResets(lines: string[]): string[] {
-    return lines.map(line => normalizeTerminalOutput(line) + SEGMENT_RESET)
+  /** Record the painted frame together with the producer lines it came from. */
+  private adoptFrame(newLines: string[]): void {
+    this.previousLines = newLines
+    this.previousSourceLines = this.pendingSourceLines
   }
 
-  private extractCursorPosition(lines: string[], height: number): { row: number; col: number } | null {
-    const viewportTop = Math.max(0, lines.length - height)
-    let position: { row: number; col: number } | null = null
-    for (let row = lines.length - 1; row >= 0; row--) {
-      const line = lines[row]
-      const markerIndex = line.indexOf(CURSOR_MARKER)
-      if (markerIndex === -1) continue
-      if (!position && row >= viewportTop) {
-        const col = stringWidth(stripAnsi(line.slice(0, markerIndex)))
-        // Do not let CHA clamp an off-row marker onto unrelated text at the
-        // terminal edge. Layout must provide an addressable cursor cell.
-        if (col < this.termCols) position = { row, col }
+  /**
+   * Turn producer lines into terminal rows: take the cursor position from the
+   * last visible marker, strip every marker, normalize tabs and close each row
+   * with a reset. Rows below `reusableRows` whose producer string is the same
+   * object as in the painted frame keep their finalized text.
+   */
+  private finalizeLines(
+    source: string[],
+    reusableRows: number,
+    height: number,
+  ): { lines: string[]; cursor: { row: number; col: number } | null } {
+    const lines = new Array<string>(source.length)
+    const viewportTop = Math.max(0, source.length - height)
+    let cursor: { row: number; col: number } | null = null
+    for (let row = source.length - 1; row >= 0; row--) {
+      const line = source[row]!
+      if (row < reusableRows && line === this.previousSourceLines[row]) {
+        lines[row] = this.previousLines[row]!
+        continue
       }
-      // Internal hints must never escape, including hidden history markers or
-      // multiple markers left by a composite frame. Last visible owner wins.
-      lines[row] = line.replaceAll(CURSOR_MARKER, '')
+      let text = line
+      const markerIndex = text.indexOf(CURSOR_MARKER)
+      if (markerIndex !== -1) {
+        if (!cursor && row >= viewportTop) {
+          const col = stringWidth(stripAnsi(text.slice(0, markerIndex)))
+          // Do not let CHA clamp an off-row marker onto unrelated text at the
+          // terminal edge. Layout must provide an addressable cursor cell.
+          if (col < this.termCols) cursor = { row, col }
+        }
+        // Internal hints must never escape, including hidden history markers
+        // or multiple markers left by a composite frame. Last visible owner wins.
+        text = text.replaceAll(CURSOR_MARKER, '')
+      }
+      lines[row] = normalizeTerminalOutput(text) + SEGMENT_RESET
     }
-    return position
+    // A copy: producers may edit their array in place between frames, and an
+    // aliased reference would then agree with itself and hide the change.
+    this.pendingSourceLines = source.slice()
+    return { lines, cursor }
   }
 
   /** Position the terminal-owned cursor, also anchoring IME composition. */

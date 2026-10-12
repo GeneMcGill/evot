@@ -12,6 +12,21 @@ import { compactRecordFromResult } from './compaction-record.js'
 import { parseStreamingToolArgs, toolArgsRecord } from './tool-args.js'
 import { usageIsPlausible } from './usage-plausibility.js'
 
+/**
+ * Newest messages kept in `AppState.messages`. The UI reads back only the
+ * last assistant text and patches tool calls on the message in flight; the
+ * transcript itself lives in the session. Keeping every message — each with
+ * its full tool results — grew without bound over a long session.
+ */
+export const MAX_RETAINED_MESSAGES = 32
+
+function appendRetained(messages: UIMessage[], message: UIMessage): UIMessage[] {
+  const next = messages.length >= MAX_RETAINED_MESSAGES
+    ? messages.slice(messages.length - MAX_RETAINED_MESSAGES + 1)
+    : messages.slice()
+  next.push(message)
+  return next
+}
 
 export function applyEvent(state: AppState, event: RunEvent): AppState {
   const rawPayload = event.payload
@@ -117,7 +132,7 @@ export function applyEvent(state: AppState, event: RunEvent): AppState {
 
       return {
         ...state,
-        messages: [...state.messages, msg],
+        messages: appendRetained(state.messages, msg),
         currentAssistantContent: content,
         verboseEvents: [],
       }
