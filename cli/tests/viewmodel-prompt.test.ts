@@ -927,28 +927,14 @@ describe('prompt footer', () => {
     expect(footer).toBe('~/github/evotai/evot (main) │ gpt-5.6-sol • high │ context: 38.9% (105.8k/272k)')
   })
 
-  test('badges the context with jev prune while the catalog publishes a judge', () => {
-    const home = process.env.HOME || process.env.USERPROFILE || '/tmp/home'
+  test('never badges the footer for judge pruning: prunes show as transcript cards', () => {
     const footer = blocksToLines(buildPromptFooterBlocks(defaultInput({
       columns: 160,
-      cwd: `${home}/github/evotai/evot`,
-      gitBranch: 'main',
-      model: 'gpt-5.6-sol',
-      provider: 'anthropic',
-      thinkingLevel: 'high',
       contextTokens: 105800,
       contextWindow: 272000,
-      judge: 'jev-latest',
     }))).map(stripAnsi)[0]!
-
-    expect(footer).toBe('~/github/evotai/evot (main) │ gpt-5.6-sol • high │ context: 38.9% (105.8k/272k) • jev prune')
-  })
-
-  test('shows the jev prune badge before the first call, and never without a judge', () => {
-    const on = blocksToLines(buildPromptFooterBlocks(defaultInput({ columns: 160, judge: 'jev-latest' }))).map(stripAnsi)[0]!
-    expect(on).toContain('│ jev prune')
-    const off = blocksToLines(buildPromptFooterBlocks(defaultInput({ columns: 160 }))).map(stripAnsi)[0]!
-    expect(off).not.toContain('jev')
+    expect(footer).toContain('context: 38.9% (105.8k/272k)')
+    expect(footer).not.toContain('jev')
   })
 
   test('shows the loop countdown as a badge after the context group', () => {
@@ -956,10 +942,9 @@ describe('prompt footer', () => {
       columns: 160,
       contextTokens: 91100,
       contextWindow: 1000000,
-      judge: 'jev-latest',
       loopWait: { label: '19m37s', remainingMs: 19 * 60_000 + 37_000 },
     }))).map(stripAnsi)[0]!
-    expect(footer).toContain('context: 9.1% (91.1k/1M) • jev prune │ ◌ loop 19m37s')
+    expect(footer).toContain('context: 9.1% (91.1k/1M) │ ◌ loop 19m37s')
     const idle = blocksToLines(buildPromptFooterBlocks(defaultInput({ columns: 160 }))).map(stripAnsi)[0]!
     expect(idle).not.toContain('loop')
   })
@@ -967,10 +952,11 @@ describe('prompt footer', () => {
   test('runtime badges share the brand tone; the loop turns yellow in its final minute', () => {
     const { brandHex } = getTheme()
     const render = (loopWait: { label: string; remainingMs: number }): string =>
-      blocksToLines(buildPromptFooterBlocks(defaultInput({ columns: 160, judge: 'jev-latest', loopWait })))[0]!
+      blocksToLines(buildPromptFooterBlocks(defaultInput({ columns: 160, loopWait })))[0]!
     const parked = render({ label: '19m37s', remainingMs: 19 * 60_000 + 37_000 })
-    expect(parked).toContain(chalk.hex(brandHex)('jev prune'))
     expect(parked).toContain(chalk.hex(brandHex)('◌ loop 19m37s'))
+    const chip = blocksToLines(buildPromptFooterBlocks(defaultInput({ columns: 160, backgroundProcessCount: 1 }))).join('\n')
+    expect(chip).toContain(chalk.hex(brandHex)('1 background shell running'))
     const soon = render({ label: '42s', remainingMs: 42_000 })
     expect(soon).toContain(chalk.yellow('◌ loop 42s'))
   })

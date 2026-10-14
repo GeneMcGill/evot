@@ -65,7 +65,6 @@ export function promptFromSnapshot(input: PromptSnapshot): PromptVMInput {
     queuedCount: input.queuedCount ?? 0,
     thinkingLevel: config?.thinkingLevel ?? '',
     ...(active?.thinking_levels?.length ? { thinkingLevels: active.thinking_levels } : {}),
-    judge: config?.judge,
     loopWait: input.loopWait,
   }
 }

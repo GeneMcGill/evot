@@ -35,10 +35,6 @@ export interface PromptFooterVM {
   gitBranch: string | null
   contextTokens: number
   contextWindow: number
-  /** Judge model the catalog publishes; set = judge-driven context pruning
-   *  is on. Shown as a badge so the user knows the context is being pruned,
-   *  not only summarised. */
-  judge?: string
   /**
    * Countdown to the next `/loop` wakeup while the agent is parked between
    * ticks. The loop's decision (why it waits, when) is a card in the
@@ -118,8 +114,8 @@ const LOOP_WAKE_SOON_MS = 60_000
  * The footer speaks in three tones and nothing else:
  *
  *   dim      facts that rarely change: cwd, model, context figures, dashboard
- *   runtime  things evot itself is doing right now: judge prune, loop wait,
- *            background shells. One hue, the brand, so they read as one family
+ *   runtime  things evot itself is doing right now: loop wait, background
+ *            shells. One hue, the brand, so they read as one family
  *   warn     what needs the user: context pressure (yellow/red), loop about to
  *            wake (yellow)
  *
@@ -269,20 +265,16 @@ function buildFooterCandidate(
         ? ` (${formatContextTokens(input.contextTokens)}/${formatContextTokens(input.contextWindow)})`
         : ''
       const text = `context: ${contextPercent.toFixed(1)}%${detail}${warning}`
-      const context: StyledSpan[] = [
+      // No badge for judge pruning: the catalog keeps it on permanently, so a
+      // badge would say nothing, and each prune already lands as a card in
+      // the transcript when it happens.
+      groups.push([
         contextPercent > 90
           ? colored(text, 'red')
           : contextPercent > 70
             ? colored(text, 'yellow')
             : dim(text),
-      ]
-      // The badge rides with the context number it acts on.
-      if (input.judge) context.push(dim(' • '), runtime('jev prune'))
-      groups.push(context)
-    } else if (layout.context !== 'hidden' && input.judge) {
-      // Before the first call there is no context number yet; the badge still
-      // tells the user the branch is on.
-      groups.push([runtime('jev prune')])
+      ])
     }
     if (input.loopWait) groups.push(loopWaitBadge(input.loopWait))
     return groups.flatMap((group, index) => index === 0 ? group : [dim(' │ '), ...group])
