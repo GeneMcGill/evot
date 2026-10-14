@@ -1110,7 +1110,7 @@ function buildLoopCard(call: UIToolCall, now: number): OutputLine[] {
   const line = (text: string): OutputLine => ({ id: genId('loop'), kind: 'tool', text })
 
   if (call.status === 'queued' || call.status === 'running') {
-    return stampToolCard([line(stop ? '⏹ loop · stopping…' : '⟳ loop · scheduling next wakeup…')], 'pending')
+    return stampToolCard([line(stop ? '⏹ loop · stopping…' : '◌ loop · scheduling next wakeup…')], 'pending')
   }
   if (call.status === 'error') {
     const lines = [line('✗ loop · wakeup not scheduled')]
@@ -1121,7 +1121,7 @@ function buildLoopCard(call: UIToolCall, now: number): OutputLine[] {
 
   const head = stop
     ? '⏹ loop · stopping'
-    : `⟳ loop${quiet ? ' · quiet' : ''} · ${loopNextWakeup(args, call.startedAt ?? now)}`
+    : `◌ loop${quiet ? ' · quiet' : ''} · ${loopNextWakeup(args, call.startedAt ?? now)}`
   const lines = [line(head)]
   if (reason) lines.push(line(`  ${reason}`))
   return stampToolCard(lines, 'success')

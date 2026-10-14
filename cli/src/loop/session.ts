@@ -68,7 +68,7 @@ export class LoopSession {
         if (!this.#controller.stop('user')) this.#deps.notify('No loop is running.')
         return
       case 'status':
-        this.#deps.notify(this.statusLine() ?? 'No loop is running.')
+        this.#deps.notify(this.statusLine() ?? 'No loop is running. Usage: /loop [interval] <prompt>')
         return
       case 'start': {
         if (this.#controller.active) this.#controller.stop('user')
@@ -106,15 +106,13 @@ export class LoopSession {
     const next = remaining === null ? 'running now' : `next wakeup in ${formatDuration(remaining)} (${clock(now + remaining)})`
     const noop = snapshot.noopStreak > 0 ? ` · ${snapshot.noopStreak} quiet` : ''
     const reason = snapshot.reason ? `\n  ${snapshot.reason}` : ''
-    return `⟳ loop · ${mode} · tick ${snapshot.tick} · ${next}${noop} · since ${clock(snapshot.startedAt)}${reason}`
+    return `◌ loop · ${mode} · tick ${snapshot.tick} · ${next}${noop} · since ${clock(snapshot.startedAt)}${reason}`
   }
 
   waitLine(now = Date.now()): string | null {
     const remaining = this.#controller.remainingMs(now)
     if (remaining === null) return null
-    const snapshot = this.#controller.snapshot
-    const reason = snapshot?.reason ? ` · ${snapshot.reason}` : ''
-    return `⟳ loop · next wakeup in ${formatDuration(remaining)}${reason} · /loop stop to end`
+    return `◌ loop · next wakeup in ${formatDuration(remaining)} (${clock(now + remaining)})`
   }
 
   dispose(): void {
@@ -145,7 +143,7 @@ export class LoopSession {
     if (!snapshot) return
     const now = Date.now()
     const quiet = snapshot.noopStreak > 0 ? ` · ${snapshot.noopStreak} quiet tick${snapshot.noopStreak === 1 ? '' : 's'} so far` : ''
-    this.#deps.notify(`⟳ loop wakeup #${snapshot.tick} (${clock(now)})${quiet}`)
+    this.#deps.notify(`◌ loop wakeup #${snapshot.tick} (${clock(now)})${quiet}`)
     this.#deps.runTurn(null, buildLoopWakeupPrompt(snapshot, now), this.#extension)
   }
 

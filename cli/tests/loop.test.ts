@@ -43,7 +43,7 @@ describe('parseLoopArgs', () => {
   })
 
   test('rejects empty prompt and out-of-range interval', () => {
-    expect(parseLoopArgs('').kind).toBe('invalid')
+    expect(parseLoopArgs('').kind).toBe('status')
     expect(parseLoopArgs('5m').kind).toBe('invalid')
     expect(parseLoopArgs('10s x').kind).toBe('invalid')
     expect(parseLoopArgs('2h x').kind).toBe('invalid')
@@ -294,7 +294,7 @@ describe('loop tool card', () => {
       args: { delay_seconds: 1600, reason: 'Waiting for the PR watcher to exit on a new codex review.', noop: false },
     })
     expect(lines).toHaveLength(2)
-    expect(lines[0]?.text).toMatch(/^⟳ loop · next wakeup in 26m 40s \(\d\d:\d\d [AP]M\)$/)
+    expect(lines[0]?.text).toMatch(/^◌ loop · next wakeup in 26m 40s \(\d\d:\d\d [AP]M\)$/)
     expect(lines[1]?.text).toBe('  Waiting for the PR watcher to exit on a new codex review.')
     expect(lines[0]?.toolCard?.state).toBe('success')
   })
@@ -302,7 +302,7 @@ describe('loop tool card', () => {
   test('quiet tick is marked', async () => {
     const { buildToolCard } = await import('../src/render/output.js')
     const [head] = buildToolCard({ ...base, status: 'done', args: { delay_seconds: 60, reason: 'r', noop: true } })
-    expect(head?.text).toContain('⟳ loop · quiet · next wakeup in 1m')
+    expect(head?.text).toContain('◌ loop · quiet · next wakeup in 1m')
   })
 
   test('stop and error states', async () => {
@@ -311,7 +311,7 @@ describe('loop tool card', () => {
     const err = buildToolCard({ ...base, status: 'error', args: { reason: 'x' }, result: 'delay_seconds is required unless stop is true.' })
     expect(err[0]?.text).toBe('✗ loop · wakeup not scheduled')
     expect(err[1]?.text).toContain('delay_seconds is required')
-    expect(buildToolCard({ ...base, status: 'running', args: {} })[0]?.text).toBe('⟳ loop · scheduling next wakeup…')
+    expect(buildToolCard({ ...base, status: 'running', args: {} })[0]?.text).toBe('◌ loop · scheduling next wakeup…')
   })
 })
 

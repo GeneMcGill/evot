@@ -45,7 +45,7 @@ export function parseLoopArgs(args: string): LoopCommand {
   }
 
   prompt = prompt.trim()
-  if (!prompt) return { kind: 'invalid', reason: 'Usage: /loop [interval] <prompt> · /loop stop · /loop status' }
+  if (!prompt) return intervalMs === null ? { kind: 'status' } : { kind: 'invalid', reason: 'Usage: /loop [interval] <prompt>' }
 
   if (intervalMs === null) return { kind: 'start', mode: { kind: 'dynamic' }, prompt }
   if (intervalMs < MIN_INTERVAL_MS || intervalMs > MAX_INTERVAL_MS) {
