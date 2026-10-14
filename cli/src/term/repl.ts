@@ -170,7 +170,6 @@ import type { OverlayState } from './app/overlay-state.js'
 import { ResourceScope } from './resource-scope.js'
 import { RenderWakeup } from './render-wakeup.js'
 import { errorText } from '../render/format.js'
-import { formatDuration as formatLoopDelay } from '../loop/parser.js'
 import { buildRunFooterLine } from '../render/run-footer.js'
 import { RunThinking } from '../render/run-thinking.js'
 import { TaskSession } from '../task/session.js'
@@ -313,8 +312,8 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
   // An in-flight run repaints its own frames; otherwise restore the idle
   // marker the same way overlays like /sessions leave it.
   const idleWaitTitle = (): string => {
-    if (backgroundWaitSince !== null) return '◌ bg'
     if (loopSession.waiting) return '◌ loop'
+    if (backgroundWaitSince !== null) return '◌ bg'
     return '✳'
   }
   const unfreezeTerminalTitle = () => {
@@ -332,10 +331,6 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
       && overlay.kind !== 'ask-user',
     notify: text => commitSystem('sys-loop', `  ${text}`),
     requestRender: () => renderer.requestRender(),
-    waitTick: remainingMs => {
-      if (isLoading || backgroundWaitSince !== null) return
-      setTerminalTitle(`${['⠂', '⠐'][titleFrame++ % 2]} loop ${formatLoopDelay(remainingMs)}`)
-    },
     waitingChanged: waiting => {
       if (isLoading) return
       sessionHook.state(waiting ? 'working' : 'idle')

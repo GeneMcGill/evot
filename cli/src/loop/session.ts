@@ -10,7 +10,6 @@ export interface LoopSessionDeps {
   canWake: () => boolean
   notify: (text: string) => void
   requestRender: () => void
-  waitTick?: (remainingMs: number) => void
   waitingChanged?: (waiting: boolean) => void
 }
 
@@ -140,8 +139,6 @@ export class LoopSession {
       return
     }
     this.#deps.requestRender()
-    const remaining = this.#controller.remainingMs()
-    if (remaining !== null && !this.#runBegun) this.#deps.waitTick?.(remaining)
     if (!this.#controller.due() || !this.#deps.canWake()) return
     this.#startRun()
     const snapshot = this.#controller.snapshot

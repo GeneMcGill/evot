@@ -356,14 +356,12 @@ describe('LoopSession waiting state', () => {
   test('reports working while a wakeup is pending and idle once stopped', async () => {
     const { LoopSession } = await import('../src/loop/session.js')
     const transitions: boolean[] = []
-    const ticks: number[] = []
     let extension: HostToolExtension | undefined
     const session = new LoopSession({
       runTurn: (_line, _prompt, ext) => { extension = ext },
       canWake: () => true,
       notify: () => {},
       requestRender: () => {},
-      waitTick: ms => ticks.push(ms),
       waitingChanged: w => transitions.push(w),
     })
     session.handleCommand('/loop watch', 'watch')
