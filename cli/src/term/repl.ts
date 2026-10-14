@@ -1810,6 +1810,14 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
         // Separating blank above the status row; queue rows bring their own.
         marginTop: 1,
       }
+    } else if (!isLoading && overlay.kind !== 'ask-user' && loopSession.waiting) {
+      const loopLine = loopSession.waitLine()
+      if (loopLine) {
+        spinnerBlock = {
+          lines: wrapTextWithAnsi(chalk.dim(loopLine), renderer.termCols).map(text => ({ spans: [{ text }] })),
+          marginTop: 1,
+        }
+      }
     } else if (backgroundWaitSince !== null && overlay.kind !== 'ask-user') {
       // Idle, but a detached task is still running and will wake the agent when
       // it finishes. Without a status row here the transcript looks finished, so
@@ -1828,14 +1836,6 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
       spinnerBlock = {
         lines: wrapTextWithAnsi(waitText, renderer.termCols).map(text => ({ spans: [{ text }] })),
         marginTop: 1,
-      }
-    } else if (!isLoading && overlay.kind !== 'ask-user') {
-      const loopLine = loopSession.waitLine()
-      if (loopLine) {
-        spinnerBlock = {
-          lines: wrapTextWithAnsi(chalk.dim(loopLine), renderer.termCols).map(text => ({ spans: [{ text }] })),
-          marginTop: 1,
-        }
       }
     }
 
@@ -2327,10 +2327,13 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
   // the ad-slot ticker stops whenever an overlay owns the screen, so neither can
   // be relied on to keep this glyph moving.
   const backgroundWaitTimer = setInterval(() => {
-    if (isLoading || backgroundWaitSince === null) return
+    if (isLoading) return
+    const loopWaiting = loopSession.waiting
+    if (!loopWaiting && backgroundWaitSince === null) return
     backgroundWaitSpinner = advanceSpinner(backgroundWaitSpinner)
     if (backgroundWaitSpinner.frame % TITLE_INTERVAL_FRAMES === 0) {
-      setTerminalTitle(`${['⠂', '⠐'][titleFrame++ % 2]} bg ${backgroundTerminals.runningCount()}`)
+      const glyph = ['⠂', '⠐'][titleFrame++ % 2]
+      setTerminalTitle(loopWaiting ? `${glyph} loop` : `${glyph} bg ${backgroundTerminals.runningCount()}`)
     }
     renderer.requestRender()
   }, SPINNER_INTERVAL_MS)
