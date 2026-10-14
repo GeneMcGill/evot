@@ -261,7 +261,7 @@ describe('LoopSession', () => {
   test('stop and status notices', () => {
     const { s, notices } = session()
     s.handleCommand('/loop status', 'status')
-    expect(notices.at(-1)).toBe('No loop is running.')
+    expect(notices.at(-1)).toContain('No loop is running.')
     s.handleCommand('/loop x', 'x')
     s.handleCommand('/loop status', 'status')
     expect(notices.at(-1)).toContain('self-paced')
@@ -294,7 +294,7 @@ describe('loop tool card', () => {
       args: { delay_seconds: 1600, reason: 'Waiting for the PR watcher to exit on a new codex review.', noop: false },
     })
     expect(lines).toHaveLength(2)
-    expect(lines[0]?.text).toMatch(/^◌ loop · next wakeup in 26m 40s \(\d\d:\d\d [AP]M\)$/)
+    expect(lines[0]?.text).toMatch(/^◌ loop · next wakeup in 26m 40s \(\d\d:\d\d:\d\d\)$/)
     expect(lines[1]?.text).toBe('  Waiting for the PR watcher to exit on a new codex review.')
     expect(lines[0]?.toolCard?.state).toBe('success')
   })

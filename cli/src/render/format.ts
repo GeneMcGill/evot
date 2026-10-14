@@ -140,6 +140,12 @@ export function formatElapsed(ms: number): string {
   return restMinutes === 0 ? `${hours}h` : `${hours}h ${restMinutes}m`
 }
 
+export function formatClock24(timestamp: number): string {
+  const at = new Date(timestamp)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${pad(at.getHours())}:${pad(at.getMinutes())}:${pad(at.getSeconds())}`
+}
+
 export function formatWallClock(timestamp: number): string {
   const at = new Date(timestamp)
   const hours = at.getHours()

@@ -11,7 +11,7 @@
 import { providerFailurePresentation } from '../provider/error-presentation.js'
 import { renderMarkdown, renderThinkingMarkdown } from './markdown.js'
 import { colorizeUnifiedDiffRows, type DiffRowKind } from './diff.js'
-import { truncate, formatDuration, formatElapsed, formatWallClock, toolResultLines, formatBashCommandDisplay, EXPAND_HINT, COLLAPSE_HINT, summarizeInline } from './format.js'
+import { truncate, formatDuration, formatElapsed, formatClock24, toolResultLines, formatBashCommandDisplay, EXPAND_HINT, COLLAPSE_HINT, summarizeInline } from './format.js'
 import { formatCompactionCompleted } from './verbose.js'
 import type { UICompaction, UIMessage, UIToolCall } from '../term/app/types.js'
 
@@ -1131,7 +1131,7 @@ function loopNextWakeup(args: Record<string, unknown>, from: number): string {
   const requested = typeof args.delay_seconds === 'number' ? args.delay_seconds : NaN
   if (!Number.isFinite(requested)) return 'next wakeup scheduled'
   const seconds = Math.min(3600, Math.max(60, Math.round(requested)))
-  return `next wakeup in ${formatElapsed(seconds * 1000)} (${formatWallClock(from + seconds * 1000)})`
+  return `next wakeup in ${formatElapsed(seconds * 1000)} (${formatClock24(from + seconds * 1000)})`
 }
 
 function humanBytes(n: number): string {
