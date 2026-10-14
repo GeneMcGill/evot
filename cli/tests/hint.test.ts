@@ -3,9 +3,9 @@ import { HINT_SEPARATOR, backgroundChord, backgroundChordLabel, formatChord } fr
 
 describe('formatChord', () => {
   test('named keys get their display spelling', () => {
-    expect(formatChord('enter')).toBe('Enter')
-    expect(formatChord('escape')).toBe('Esc')
-    expect(formatChord('tab')).toBe('Tab')
+    expect(formatChord('enter')).toBe('↵')
+    expect(formatChord('escape')).toBe('esc')
+    expect(formatChord('tab')).toBe('tab')
   })
 
   test('arrows render as glyphs', () => {
@@ -13,8 +13,10 @@ describe('formatChord', () => {
     expect(formatChord('down')).toBe('↓')
   })
 
-  test('interchangeable keys are joined with a slash', () => {
-    expect(formatChord(['up', 'down'])).toBe('↑/↓')
+  test('arrow pairs fuse; other alternatives keep a slash', () => {
+    expect(formatChord(['up', 'down'])).toBe('↑↓')
+    expect(formatChord(['left', 'right'])).toBe('←→')
+    expect(formatChord(['j', 'k'])).toBe('j/k')
   })
 
   test('bare characters are shown as typed, preserving case', () => {
@@ -28,7 +30,7 @@ describe('formatChord', () => {
   })
 
   test('a single-element list reads like a bare key', () => {
-    expect(formatChord(['enter'])).toBe('Enter')
+    expect(formatChord(['enter'])).toBe('↵')
   })
 })
 

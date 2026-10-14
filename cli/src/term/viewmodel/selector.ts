@@ -238,10 +238,10 @@ function buildModelFooter(selected: SelectorItem, active: boolean, width: number
   const rows: StyledLine[] = [line(...name)]
   if (!active) return rows
   const hints: Hint[] = [
-    { keys: '↑↓', action: 'select' },
-    ...(level !== undefined ? [{ keys: '←→', action: 'reasoning effort' }] : []),
-    { keys: '↵', action: 'confirm' },
-    { keys: 'esc', action: 'cancel' },
+    { keys: ['up', 'down'], action: 'select' },
+    ...(level !== undefined ? [{ keys: ['left', 'right'], action: 'reasoning effort' }] : []),
+    { keys: 'enter', action: 'confirm' },
+    { keys: 'escape', action: 'close' },
   ]
   const bar = selectorHints(hints, Math.max(1, width - 2))
   rows.push(...bar.map(row => line(plain('  '), ...row.spans)))
@@ -350,12 +350,12 @@ export function buildSelectorBlocks(
   // hint list keep their hand-written lines below.
   const hints = state.previewPane ? splitPaneHints(state) : state.items[state.focusIndex]?.hints ?? state.hints
   if (hints) {
-    lines.push(...selectorHints(hints, available, state.lowercaseHints))
+    lines.push(...selectorHints(hints, available))
   } else {
     const defaults = state.owner === SELECTOR_OWNER.queue
-      ? [{ keys: 'enter', action: 'edit' }, { keys: 'Ctrl+D', action: 'remove' }, { keys: 'esc', action: 'close' }]
-      : [{ keys: '↑↓', action: state.circularNavigation ? 'move · wraps' : 'move' },
-        { keys: 'enter', action: 'select' }, { keys: 'type', action: 'filter' }, { keys: 'esc', action: 'close' }]
+      ? [{ keys: 'enter', action: 'edit' }, { keys: 'ctrl+d', action: 'remove' }, { keys: 'escape', action: 'close' }]
+      : [{ keys: ['up', 'down'], action: state.circularNavigation ? 'select · wraps' : 'select' },
+        { keys: 'enter', action: 'confirm' }, { keys: 'type', action: 'search' }, { keys: 'escape', action: 'close' }]
     lines.push(...selectorHints(defaults, available))
   }
   return [block(lines, 1)]

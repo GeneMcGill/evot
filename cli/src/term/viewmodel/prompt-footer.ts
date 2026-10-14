@@ -13,6 +13,8 @@ import { line, block, plain, dim, colored, type ViewBlock, type StyledLine, type
 import { finiteSize, spansWidth, truncateTailToWidth, truncateToWidth } from './width.js'
 import { BACKGROUND_PANEL_HINT_CHORD } from '../app/background-panel.js'
 import { FORK_GLYPH, formatForkTrail } from './fork-trail.js'
+import { GAUGE_CELL, effortCellHex, effortLabel, effortLevelHex } from './model-effort.js'
+import { getTheme } from '../../render/theme/index.js'
 
 /** The subset of prompt state the footer reads. */
 export interface PromptFooterVM {
@@ -20,6 +22,8 @@ export interface PromptFooterVM {
   model: string
   provider: string
   thinkingLevel: string
+  /** The active model's effort ladder; with it the footer draws a gauge. */
+  thinkingLevels?: readonly string[]
   planning: boolean
   logMode: boolean
   dashboardUrl: string | null
@@ -214,8 +218,7 @@ function buildFooterCandidate(
     if (layout.model && input.model) {
       const identity: StyledSpan[] = [dim(input.model)]
       if (layout.thinking && input.thinkingLevel) {
-        const thinking = input.thinkingLevel === 'off' ? 'thinking off' : input.thinkingLevel
-        identity.push(dim(` • ${thinking}`))
+        identity.push(dim(' • '), ...thinkingBadge(input.thinkingLevel, input.thinkingLevels))
       }
       groups.push(identity)
     }
@@ -254,6 +257,23 @@ function buildFooterCandidate(
   left = buildLeft(truncateTailToWidth(`${mode}${cwd}`, availableLocationWidth))
   candidate = { left, dashboard }
   return candidate
+}
+
+/** `◼◼◼◼ medium`: the same ramp-lit ladder as the /model picker, so shift+tab
+ *  shows its effect at a glance. Without a ladder, just the tier name. */
+function thinkingBadge(level: string, levels: readonly string[] | undefined): StyledSpan[] {
+  const index = levels?.indexOf(level) ?? -1
+  if (!levels || index < 0) return [dim(level === 'off' ? 'thinking off' : level)]
+  const { subtleHex } = getTheme()
+  const effort = { levels, index }
+  const lit: StyledSpan[] = Array.from({ length: index + 1 }, (_, at) =>
+    ({ text: GAUGE_CELL, hex: effortCellHex(at, levels.length) }))
+  const empty = GAUGE_CELL.repeat(levels.length - lit.length)
+  return [
+    ...lit,
+    ...(empty ? [{ text: empty, hex: subtleHex }] : []),
+    { text: ` ${effortLabel(level).toLowerCase()}`, hex: effortLevelHex(effort) },
+  ]
 }
 
 function footerCandidateWidth(candidate: FooterCandidate): number {

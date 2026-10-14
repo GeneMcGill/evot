@@ -35,7 +35,7 @@ import type { StyledSpan } from './types.js'
  * not a hollow outline. One glyph keeps the pitch even; a hollow `□` would both
  * break that rhythm and read as a checkbox rather than an empty slot.
  */
-const GAUGE_CELL = '◼'
+export const GAUGE_CELL = '◼'
 const ARROW_LEFT = '←'
 const ARROW_RIGHT = '→'
 

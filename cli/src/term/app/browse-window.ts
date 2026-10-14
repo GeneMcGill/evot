@@ -8,7 +8,6 @@ export function browseWindow(state: SelectorState, listFocused = false): Selecto
     presentation: 'browser',
     previewPane: { offset: 0, confirmDeleteKey: 'd' },
     listFocused,
-    lowercaseHints: true,
   }
 }
 

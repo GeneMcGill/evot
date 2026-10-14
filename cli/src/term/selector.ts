@@ -73,7 +73,7 @@ export interface SelectorItem {
  * position in `levels`.
  */
 export interface SelectorEffort {
-  levels: string[]
+  levels: readonly string[]
   index: number
 }
 
@@ -133,8 +133,6 @@ export interface SelectorState {
    *  the list slides one row at a time instead of recentering (droid-style). */
   scrollOffset: number
   title: string
-  /** Keep shortcut hints lowercase on session browsing/editing surfaces. */
-  lowercaseHints?: boolean
   /** Optional secondary context displayed below the title. */
   subtitle?: string
   /** Model selection and live background output use dedicated editor-replacement

@@ -63,7 +63,7 @@ describe('session name editor', () => {
     const list = buildSelectorRegionLines(window(), 120).map(stripAnsi).join('\n')
     expect(list).toContain('e rename')
     expect(list).not.toContain('ctrl+r')
-    expect(list).toContain('enter')
+    expect(list).toContain('↵ resume')
     expect(list).not.toMatch(/Ctrl\+|Enter|Esc/)
     const editor = buildSelectorRegionLines(editing(), 80).map(stripAnsi).join('\n')
     expect(editor).toContain('Rename session')

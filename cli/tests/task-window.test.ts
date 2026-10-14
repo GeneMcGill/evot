@@ -332,7 +332,7 @@ describe('task window', () => {
         expect(text).toContain('space pause/resume')
         expect(text).toContain('d delete')
       }
-      if (!focused) expect(text).toContain('enter runs')
+      if (!focused) expect(text).toContain('↵ runs')
       expect(text).not.toContain('Tab to focus')
       expect(text).not.toContain('Tab back')
     }

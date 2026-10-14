@@ -9,6 +9,7 @@ import { blocksToLines } from '../src/term/viewmodel/types.js'
 import { joinLeftRight, spansWidth } from '../src/term/viewmodel/width.js'
 import { buildPromptBlocks, type PromptVMInput } from '../src/term/viewmodel/prompt.js'
 import { buildPromptFooterBlocks } from '../src/term/viewmodel/prompt-footer.js'
+import { getTheme } from '../src/render/theme/index.js'
 
 beforeAll(() => { chalk.level = 3 })
 
@@ -866,6 +867,23 @@ describe('prompt footer', () => {
 
   test('labels disabled thinking', () => {
     expect(renderPlain(defaultInput({ thinkingLevel: 'off' }))).toContain('thinking off')
+  })
+
+  test('with a ladder the footer draws the same gauge as the /model picker', () => {
+    const levels = ['off', 'low', 'medium', 'high']
+    const plain = renderPlain(defaultInput({ thinkingLevel: 'medium', thinkingLevels: levels }))
+    expect(plain).toContain('◼◼◼◼ medium')
+    // `off` is a tier on this ladder, so it lights one cell like any other.
+    expect(renderPlain(defaultInput({ thinkingLevel: 'off', thinkingLevels: levels }))).toContain('◼◼◼◼ off')
+    expect(renderPlain(defaultInput({ thinkingLevel: 'high', thinkingLevels: levels }))).toContain('◼◼◼◼ high')
+    // Lit cells carry ramp colours; the trailing empty cells share one tone.
+    const raw = blocksToLines(buildPromptFooterBlocks(defaultInput({ thinkingLevel: 'medium', thinkingLevels: levels, columns: 160 })))[0]!
+    const { effortRampHex, subtleHex } = getTheme()
+    expect(raw).toContain(chalk.hex(effortRampHex[0]!)('◼'))
+    expect(raw).toContain(chalk.hex(subtleHex)('◼'))
+    // A level outside the ladder is named rather than mis-gauged.
+    expect(renderPlain(defaultInput({ thinkingLevel: 'xhigh', thinkingLevels: levels }))).toContain('• xhigh')
+    expect(renderPlain(defaultInput({ thinkingLevel: 'xhigh', thinkingLevels: levels }))).not.toContain('◼')
   })
 
   test('renders context and dashboard when space allows', () => {

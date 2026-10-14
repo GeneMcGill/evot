@@ -283,11 +283,11 @@ describe('effort column rendering', () => {
   test('the footer names the model and tier, and offers ←→ only on a row with a ladder', () => {
     const withLadder = rows(modelWindow()).join('\n')
     expect(withLadder).toContain('Model: claude-sonnet-5 · High')
-    expect(withLadder).toContain('↑↓ select · ←→ reasoning effort · ↵ confirm · esc cancel')
+    expect(withLadder).toContain('↑↓ select · ←→ reasoning effort · ↵ confirm · esc close')
     const noLadder = rows(modelWindow('adaptive')).join('\n')
     expect(noLadder).toContain('Model: adaptive')
     expect(noLadder).not.toContain('reasoning effort')
-    expect(noLadder).toContain('↑↓ select · ↵ confirm · esc cancel')
+    expect(noLadder).toContain('↑↓ select · ↵ confirm · esc close')
   })
 
   test('a preview reports the tier but names no gesture it cannot serve', () => {

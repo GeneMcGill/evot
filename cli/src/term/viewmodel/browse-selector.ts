@@ -56,11 +56,11 @@ export function buildBrowseSelectorLines(state: SelectorState, columns: number, 
   }
   lines.push(line(dim(count ? `${state.items.slice(0, state.focusIndex + 1).filter(item => !item.header).length} / ${count}${start > 0 || end < state.items.length ? ' · ↑↓ more' : ''}` : '')))
   const hints = splitPaneHints(state)
-  const footer = selectorHints(hints, width, state.lowercaseHints)
+  const footer = selectorHints(hints, width)
   // Reserve the largest list footer, so Tab/confirmation never move the prompt.
   const hintSets = new Set(state.allItems.map(item => item.hints ?? state.hints))
   let footerHeight = footer.length
-  for (const set of hintSets) footerHeight = Math.max(footerHeight, selectorHints(set ?? [], width, state.lowercaseHints).length)
+  for (const set of hintSets) footerHeight = Math.max(footerHeight, selectorHints(set ?? [], width).length)
   lines.push(...footer)
   for (let pad = footer.length; pad < footerHeight; pad++) lines.push(line(plain('')))
   return lines.map(row => styledLineToAnsi({ ...row, spans: truncateSpansToWidth(row.spans.filter(span => span.text !== CURSOR_MARKER || active), width) }))

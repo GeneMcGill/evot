@@ -61,7 +61,7 @@ describe('background panel rendering', () => {
   test('hints use compact key/action pairs joined by a middot', () => {
     const lines = render([proc()])
     expect(lines[lines.length - 1])
-      .toBe('↑/↓ select · Enter view output · x stop · Esc close')
+      .toBe('↑↓ select · ↵ view output · x stop · esc close')
   })
 
   test('navigation cannot select a finished task', () => {
@@ -122,7 +122,7 @@ describe('background panel rendering', () => {
   test('an empty panel states it in the body and offers only close', () => {
     const lines = render([])
     expect(lines).toContain('  No tasks currently running')
-    expect(lines[lines.length - 1]).toBe('Esc close')
+    expect(lines[lines.length - 1]).toBe('esc close')
     // No count line above an empty body: the body is the whole message.
     expect(lines.join('\n')).not.toContain('active shell')
   })
@@ -135,7 +135,7 @@ describe('background panel rendering', () => {
     expect(lines).toContain('⌘ Background task · aaaaaaaa')
     expect(lines.some(line => line.trim() === 'line 30')).toBe(true)
     expect(lines.some(line => line.trim() === 'line 1')).toBe(false)
-    expect(lines.join('\n')).toContain('Esc back')
+    expect(lines.join('\n')).toContain('esc back')
     expect(lines.every(line => line.length <= 100)).toBe(true)
 
     const short = buildSelectorRegionLines(state, 100, 12).map(stripAnsi)
@@ -147,7 +147,7 @@ describe('background panel rendering', () => {
     for (const status of ['running', 'completed'] as const) {
       const state = createBackgroundOutputState(proc({ status }), 'hello')
       const lines = buildSelectorRegionLines(state, 120, 30).map(stripAnsi)
-      const footer = lines.find(line => line.includes('Esc back'))
+      const footer = lines.find(line => line.includes('esc back'))
       expect(footer).toBeDefined()
       expect(footer).toContain('scroll')
       expect(footer).not.toContain('follow')
@@ -194,7 +194,7 @@ describe('background panel rendering', () => {
       expect(lines.length).toBeLessThanOrEqual(rows)
       expect(lines.every(text => text.length <= 60)).toBe(true)
       expect(lines).toContain('  latest output')
-      expect(lines.join('\n')).toContain('Esc')
+      expect(lines.join('\n')).toContain('esc')
       const commandView = { ...state, outputView: { scrollOffset: 0 } }
       expect(buildSelectorRegionLines(commandView, 60, rows).length).toBeLessThanOrEqual(rows)
     }

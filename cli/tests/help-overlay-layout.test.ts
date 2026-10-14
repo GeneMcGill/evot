@@ -12,9 +12,16 @@ function helpRows(columns = 80): string[] {
   return blocksToLines(buildOverlayBlocks({ kind: 'help' }, columns)).map(stripAnsi)
 }
 
-/** Rows listing a command or key binding, i.e. everything but title/footer/blanks. */
+/** Rows listing a command or key binding: everything but title, section
+ *  labels, footer and blanks. */
 function entryRows(rows: string[]): string[] {
-  return rows.filter(row => /^\s{2}\S/.test(row) && !row.includes('Press Esc to dismiss'))
+  return rows.filter(row => /^\s{2}\S/.test(row) && !/^\s{2}(Keys|Commands)$/.test(row) && !row.includes('esc close'))
+}
+
+function descColumn(row: string): number {
+  const afterKey = row.slice(2).search(/\s\s+\S/)
+  const gapStart = 2 + afterKey + 1
+  return gapStart + row.slice(gapStart).search(/\S/)
 }
 
 describe('help overlay layout', () => {
@@ -25,22 +32,26 @@ describe('help overlay layout', () => {
     expect([...indents]).toEqual([2])
   })
 
-  test('descriptions share one column', () => {
-    const entries = entryRows(helpRows())
-    // Second column begins after the widest key plus the gap, identically on
-    // every row — this is what makes the panel scannable.
-    const descColumns = new Set(entries.map(row => {
-      const afterKey = row.slice(2).search(/\s\s+\S/)
-      const gapStart = 2 + afterKey + 1
-      return gapStart + row.slice(gapStart).search(/\S/)
-    }))
-    expect(descColumns.size).toBe(1)
+  test('descriptions share one column within each section', () => {
+    const rows = helpRows()
+    const keys = rows.indexOf('  Keys')
+    const commands = rows.indexOf('  Commands')
+    expect(keys).toBeGreaterThan(0)
+    expect(commands).toBeGreaterThan(keys)
+    const keyEntries = entryRows(rows.slice(keys, commands))
+    const commandEntries = entryRows(rows.slice(commands))
+    expect(keyEntries.length).toBeGreaterThan(10)
+    expect(commandEntries.length).toBeGreaterThan(10)
+    expect(new Set(keyEntries.map(descColumn)).size).toBe(1)
+    expect(new Set(commandEntries.map(descColumn)).size).toBe(1)
+    // The long `/share` signature widens only its own section.
+    expect(descColumn(keyEntries[0]!)).toBeLessThan(descColumn(commandEntries[0]!))
   })
 
-  test('title and dismiss hint are centred over the table, not left-aligned', () => {
+  test('title and close hint are centred over the table, not left-aligned', () => {
     const rows = helpRows()
     const title = rows.find(row => row.includes('Keyboard Shortcuts'))
-    const footer = rows.find(row => row.includes('Press Esc to dismiss'))
+    const footer = rows.find(row => row.includes('esc close'))
     expect(title).toBeDefined()
     expect(footer).toBeDefined()
 

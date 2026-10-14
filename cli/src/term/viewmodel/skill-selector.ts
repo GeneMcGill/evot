@@ -80,7 +80,7 @@ export function buildSkillSelectorLines(state: SelectorState, width: number, row
   const focused = active && state.listFocused !== true
   const search = styledLineToAnsi(selectorSearch(state.query, width, focused, 'Search skills…'))
   const hints = [
-    { keys: ['up', 'down'], action: 'move' },
+    { keys: ['up', 'down'], action: 'select' },
     ...(selected?.expanded !== undefined && !state.query ? [{ keys: 'enter', action: selected.expanded ? 'collapse' : 'expand' }] : []),
     { keys: 'type', action: 'search' },
     { keys: 'escape', action: 'close' },

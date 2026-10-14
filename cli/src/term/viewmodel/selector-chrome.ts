@@ -28,11 +28,11 @@ export function selectorSearch(query: string, width: number, focused: boolean, p
 }
 
 /** Pack whole gestures onto rows; never silently clip the last actions. */
-export function selectorHints(hints: Hint[], width: number, lowercase = false): StyledLine[] {
+export function selectorHints(hints: Hint[], width: number): StyledLine[] {
   const result: StyledLine[] = []
   let spans: StyledSpan[] = []
   for (const hint of hints) {
-    const key = lowercase ? formatChord(hint.keys).toLowerCase() : formatChord(hint.keys)
+    const key = formatChord(hint.keys)
     const entry = hint.confirmationPending
       ? [confirmationHint(`${key} ${hint.action}`, true)]
       : [{ text: key, hex: getTheme().brandHex }, dim(` ${hint.action}`)]

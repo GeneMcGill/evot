@@ -55,10 +55,10 @@ describe('selector ownership boundary', () => {
     expect(handleSelectorControl(state, remove).kind).toBe('queue-remove')
     expect(handleSelectorControl(state, { type: 'char', char: 'x' }).kind).toBe('none')
     const text = blocksToLines(buildOverlayBlocks({ kind: 'selector', state }, 80)).join('\n')
-    expect(stripAnsi(text)).toContain('Ctrl+D remove')
+    expect(stripAnsi(text)).toContain('ctrl+d remove')
     const generic = createSelectorState('Prompt queue', items)
     const genericText = blocksToLines(buildOverlayBlocks({ kind: 'selector', state: generic }, 80)).join('\n')
-    expect(stripAnsi(genericText)).not.toContain('Ctrl+D remove')
+    expect(stripAnsi(genericText)).not.toContain('ctrl+d remove')
   })
 
   test('informational and background factories never dispatch generic business actions', () => {

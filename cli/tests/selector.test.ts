@@ -321,8 +321,8 @@ describe('renderSelector via viewmodel', () => {
     const state = createSelectorState('T', items)
     const lines = blocksToLines(buildOverlayBlocks({ kind: 'selector', state }, 80))
     const text = lines.map(l => stripAnsi(l)).join('\n')
-    expect(text).toContain('move')
-    expect(text).toContain('Enter select')
+    expect(text).toContain('↑↓ select')
+    expect(text).toContain('↵ confirm')
     expect(text).toContain('esc close')
   })
 
@@ -330,8 +330,8 @@ describe('renderSelector via viewmodel', () => {
     const state = createAppSelectorState('queue', 'Prompt queue', items)
     const lines = blocksToLines(buildOverlayBlocks({ kind: 'selector', state }, 80))
     const text = lines.map(l => stripAnsi(l)).join('\n')
-    expect(text).toContain('Enter edit')
-    expect(text).toContain('Ctrl+D remove')
+    expect(text).toContain('↵ edit')
+    expect(text).toContain('ctrl+d remove')
     expect(text).not.toContain('del remove')
   })
 

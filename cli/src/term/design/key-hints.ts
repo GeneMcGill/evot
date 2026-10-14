@@ -2,7 +2,14 @@
  * Keyboard hint formatting for overlay footers.
  *
  * One place owns how a chord is spelled, so every surface that advertises a key
- * reads the same way: `↑/↓ to select · Enter to view · x to stop · Esc to close`.
+ * reads the same way: `↑↓ select · ↵ confirm · x stop · esc close`.
+ *
+ * Verb vocabulary, shared by every footer:
+ * - `select`  ↑↓ moves the highlight
+ * - `confirm` ↵ acts on the highlighted row
+ * - `close`   esc leaves the surface without acting
+ * - `cancel`  esc also abandons an edit in progress
+ * - `search`  typing filters the list
  */
 
 /** Separator between hint entries. */
@@ -17,18 +24,21 @@ const KEY_LABELS: Record<string, string> = {
   down: '↓',
   left: '←',
   right: '→',
-  enter: 'Enter',
-  escape: 'Esc',
-  tab: 'Tab',
-  space: 'Space',
-  backspace: 'Backspace',
-  delete: 'Delete',
+  enter: '↵',
+  escape: 'esc',
+  tab: 'tab',
+  space: 'space',
+  backspace: 'backspace',
+  delete: 'delete',
 }
 
-/** Spell one key, or a set of interchangeable keys as `↑/↓`. */
+/** Arrow pairs fuse (`↑↓`, `←→`); other alternatives keep a slash (`j/k`). */
+const FUSED = new Set(['↑', '↓', '←', '→'])
+
+/** Spell one key, or a set of interchangeable keys. */
 export function formatChord(keys: string | string[]): string {
-  const list = typeof keys === 'string' ? [keys] : keys
-  return list.map(key => KEY_LABELS[key] ?? key).join('/')
+  const list = (typeof keys === 'string' ? [keys] : keys).map(key => KEY_LABELS[key] ?? key)
+  return list.every(key => FUSED.has(key)) ? list.join('') : list.join('/')
 }
 
 export interface Hint {

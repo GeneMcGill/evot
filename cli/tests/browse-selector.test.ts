@@ -141,7 +141,7 @@ describe('shared browse surface', () => {
     expect(rows.length).toBeGreaterThan(1)
     expect(rows.every(row => stringWidth(row) <= 32)).toBe(true)
     expect(rows.join('\n')).toContain('d delete')
-    expect(rows.join('\n')).toContain('Esc close')
+    expect(rows.join('\n')).toContain('esc close')
   })
 
   test('long CJK search keeps the cursor and tail inside its width budget', () => {

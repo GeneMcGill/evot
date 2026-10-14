@@ -30,17 +30,15 @@ export interface PromptSnapshot {
 export function promptFromSnapshot(input: PromptSnapshot): PromptVMInput {
   const { editor, session, config } = input
   const empty = isEditorEmpty(editor)
+  const active = config?.availableModels.find(model => model.model === session.model && model.provider === (config?.provider ?? ''))
+    ?? config?.availableModels.find(model => model.model === session.model)
   return {
     lines: editor.lines,
     cursorLine: editor.cursorLine,
     cursorCol: editor.cursorCol,
     active: input.active,
     model: session.model,
-    provider: providerDisplayName(
-      config?.availableModels.find(model => model.model === session.model && model.provider === (config?.provider ?? ''))
-        ?? config?.availableModels.find(model => model.model === session.model),
-      config?.provider ?? '',
-    ),
+    provider: providerDisplayName(active, config?.provider ?? ''),
     planning: input.planning,
     logMode: input.logMode,
     dashboardUrl: input.dashboardUrl,
@@ -63,6 +61,7 @@ export function promptFromSnapshot(input: PromptSnapshot): PromptVMInput {
     busy: input.busy ?? false,
     queuedCount: input.queuedCount ?? 0,
     thinkingLevel: config?.thinkingLevel ?? '',
+    ...(active?.thinking_levels?.length ? { thinkingLevels: active.thinking_levels } : {}),
     judge: config?.judge,
   }
 }

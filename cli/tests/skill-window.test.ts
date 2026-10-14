@@ -20,7 +20,7 @@ describe('skill command window', () => {
     expect(state.allItems[2]?.searchText).toContain('cloud')
     expect(state.allItems[2]?.searchText).not.toContain('/skills/cloud/deploy')
     expect(state.hints).toEqual([
-      { keys: ['up', 'down'], action: 'move' },
+      { keys: ['up', 'down'], action: 'select' },
       { keys: 'type', action: 'search' },
       { keys: 'escape', action: 'close' },
     ])

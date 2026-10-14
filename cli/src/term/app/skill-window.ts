@@ -85,7 +85,7 @@ export function createSkillSelectorState(entries: SkillEntry[]): SelectorState {
     presentation: 'skill',
     ...(items.length === 0 ? { emptyMessage: 'No skills installed' } : {}),
     hints: [
-      { keys: ['up', 'down'], action: 'move' },
+      { keys: ['up', 'down'], action: 'select' },
       { keys: 'type', action: 'search' },
       { keys: 'escape', action: 'close' },
     ],

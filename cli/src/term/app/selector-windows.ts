@@ -15,10 +15,10 @@ import { browseWindow } from './browse-window.js'
 /** Enter uses a model for this session; Space only saves the highlighted row
  *  as the account default (the picker stays open, the live model stays put). */
 export const MODEL_WINDOW_HINTS: Hint[] = [
-  { keys: ['up', 'down'], action: 'move' },
+  { keys: ['up', 'down'], action: 'select' },
   { keys: 'enter', action: 'use' },
   { keys: 'space', action: 'set default' },
-  { keys: 'type', action: 'filter' },
+  { keys: 'type', action: 'search' },
   { keys: 'escape', action: 'close' },
 ]
 
