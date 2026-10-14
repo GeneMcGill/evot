@@ -8,7 +8,7 @@
 
 ## News
 
-- **2026-10-14** `/loop` — repeat a prompt on an interval, or let the agent pace itself until the job is done.
+- **2026-10-14** `/loop` — babysit a PR, poll a deploy, check back on a build; the agent picks when to wake and when to stop.
 - **2026-09-16** `/task` — scheduled runs with push delivery.
 - **2026-09-13** `/share` — read-only session links on evot.ai.
 - **2026-09-02** `ctrl+b` — background a running command and keep talking.
