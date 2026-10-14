@@ -7,15 +7,14 @@ import { wrapTextWithAnsi } from '../../render/wrap.js'
 import { line, block, plain, dim, bold, colored, blocksToLines, styledLineToAnsi, type ViewBlock, type StyledSpan, type StyledLine } from './types.js'
 import { finiteSize, spansWidth, truncateToWidth } from './width.js'
 import { PREVIEW_ALERT_PREFIX, PREVIEW_SECTION_PREFIX, SELECTOR_VIEWPORT, selectorEffortLevel, type SelectorItem, type SelectorState } from '../selector.js'
-import { HINT_SEPARATOR, formatChord } from '../design/key-hints.js'
-import { getTheme } from '../../render/theme/index.js'
+import { HINT_SEPARATOR, type Hint } from '../design/key-hints.js'
 import { buildSkillSelectorLines } from './skill-selector.js'
 import { scrollPreview } from './scroll-preview.js'
 import { confirmationHint } from './confirmation-hint.js'
 import { previewGeometry } from '../preview-scroll.js'
 import { splitPaneHints } from '../split-pane.js'
 import { buildSelectorHeader, buildSelectorRow } from './selector-row.js'
-import { buildEffortCell, effortLabel, planEffortLayout } from './model-effort.js'
+import { buildEffortCell, effortLabel, effortLevelHex, planEffortLayout } from './model-effort.js'
 import { buildBrowseSelectorLines } from './browse-selector.js'
 import { selectorColumns, selectorHints, selectorTitle, selectorSearch } from './selector-chrome.js'
 
@@ -135,7 +134,6 @@ function buildModelSelectorRegionLines(state: SelectorState, width: number, acti
   )
   const end = Math.min(start + maxVisible, state.items.length)
 
-  const { brandHex } = getTheme()
   // Plan from all filtered model rows, not the current viewport. Policy rows
   // have no effort control and must not push model gauges across the terminal
   // while their explanatory text enters/leaves the viewport.
@@ -212,21 +210,7 @@ function buildModelSelectorRegionLines(state: SelectorState, width: number, acti
     const selected = state.items[state.focusIndex]
     if (selected && !selected.header) {
       lines.push(line(plain('')))
-      lines.push(line(dim(`  Model Name: ${selected.label}`)))
-      // The gauge alone does not say it can be moved, so the gesture is named
-      // only on a row that actually carries a ladder — and only where it would
-      // actually work. In a command-window preview the composer still owns the
-      // line, so ←/→ move the text cursor there; naming them would be a lie.
-      const level = selectorEffortLevel(selected)
-      if (level !== undefined) {
-        lines.push(line(
-          dim('  Effort: '),
-          { text: effortLabel(level), hex: brandHex },
-          ...(active ? [dim(`${HINT_SEPARATOR}${formatChord(['left', 'right'])} to adjust`)] : []),
-        ))
-      } else if (measuredModels.length > 0) {
-        lines.push(line(plain('')))
-      }
+      lines.push(...buildModelFooter(selected, active, width))
     }
   }
 
@@ -240,6 +224,28 @@ function buildModelSelectorRegionLines(state: SelectorState, width: number, acti
     if (index === 4) return [rendered]
     return wrapTextWithAnsi(rendered, width)
   })
+}
+
+/** `Model: <name> · <tier>` plus, when the selector owns input, a hint bar.
+ *  ←→ is offered only on a row with a ladder; a preview names no gestures,
+ *  since ↑/↓ and ←/→ still belong to the composer there. */
+function buildModelFooter(selected: SelectorItem, active: boolean, width: number): StyledLine[] {
+  const level = selectorEffortLevel(selected)
+  const name: StyledSpan[] = [dim('  Model: '), plain(selected.label)]
+  if (level !== undefined && selected.effort) {
+    name.push(dim(HINT_SEPARATOR), { text: effortLabel(level), hex: effortLevelHex(selected.effort) })
+  }
+  const rows: StyledLine[] = [line(...name)]
+  if (!active) return rows
+  const hints: Hint[] = [
+    { keys: '↑↓', action: 'select' },
+    ...(level !== undefined ? [{ keys: '←→', action: 'reasoning effort' }] : []),
+    { keys: '↵', action: 'confirm' },
+    { keys: 'esc', action: 'cancel' },
+  ]
+  const bar = selectorHints(hints, Math.max(1, width - 2))
+  rows.push(...bar.map(row => line(plain('  '), ...row.spans)))
+  return rows
 }
 
 function buildModelSearchLine(query: string, width: number, active: boolean): StyledLine {

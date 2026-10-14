@@ -32,6 +32,8 @@ export interface Theme {
    *  reading as copy, e.g. the unfilled cells of a gauge. `dim` is already
    *  `mutedHex`, so a two-tone meter needs a tone below it. */
   subtleHex: string
+  /** Cool-to-warm ramp for the lit cells of an effort gauge, low to high. */
+  effortRampHex: string[]
   /** Fill behind a selected row (completion menu). */
   selectionBgHex: string
   /** Secondary text on `selectionBgHex`, where the normal dim gray is too dark. */

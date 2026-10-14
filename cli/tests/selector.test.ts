@@ -165,7 +165,7 @@ describe('renderSelector via viewmodel', () => {
     expect(lines[12]).toBe('  droid')
     // Idle model rows carry a `·` gutter; only group headings keep two spaces.
     expect(lines[13]).toBe('· gpt-5.6-sol')
-    expect(lines[15]).toBe('  Model Name: grok-4.5')
+    expect(lines[15]).toBe('  Model: grok-4.5')
     expect(lines.at(-1)).toBe('─'.repeat(40))
     expect(lines.join('\n')).not.toContain('Models  2')
     expect(lines.join('\n')).not.toContain('enter select')
@@ -422,7 +422,7 @@ describe('renderSelector via viewmodel', () => {
 
     expect(active).toContain(CURSOR_MARKER)
     expect(preview).not.toContain(CURSOR_MARKER)
-    expect(stripAnsi(preview)).toContain('Model Name:')
+    expect(stripAnsi(preview)).toContain('Model:')
   })
 
   test('a promoted model window drops its search caret, leaving one cursor', () => {
@@ -436,7 +436,7 @@ describe('renderSelector via viewmodel', () => {
     const promoted = buildSelectorRegionLines(state, 80, 24, true).join('\n')
 
     expect(promoted).not.toContain(CURSOR_MARKER)
-    expect(stripAnsi(promoted)).toContain('Model Name:')
+    expect(stripAnsi(promoted)).toContain('Model:')
   })
 
   test('generic selector transfers its cursor without changing row geometry', () => {

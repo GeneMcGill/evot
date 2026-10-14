@@ -27,6 +27,7 @@ export function lightTheme(): Theme {
     // Light mirror of the dark theme's gauge tone: on a light page an empty
     // cell has to sit *above* muted to stay visible, not below it.
     subtleHex: '#b8b8b8',
+    effortRampHex: ['#3f9142', '#8a9a1c', '#b07f12', '#d9741f', '#cb4b4b', '#8d4bb8'],
     selectionBgHex: '#dfe3fd',
     selectionMutedHex: '#5b6070',
 

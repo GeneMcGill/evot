@@ -40,7 +40,7 @@ for (const width of [80, 160]) {
       const lines = buildSelectorRegionLines({ ...base, focusIndex }, width, 40, true).map(stripAnsi)
       heights.add(lines.length)
       searchRows.add(lines.findIndex(row => row.startsWith('>')))
-      footerRows.add(lines.findIndex(row => row.includes('Model Name:')))
+      footerRows.add(lines.findIndex(row => row.includes('Model:')))
       for (const row of lines) {
         const gauge = row.indexOf('◼')
         if (gauge >= 0) columns.add(stringWidth(row.slice(0, gauge)))

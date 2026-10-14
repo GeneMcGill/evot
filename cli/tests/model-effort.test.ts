@@ -19,6 +19,7 @@ import {
   type SelectorState,
 } from '../src/term/selector.js'
 import { buildSelectorRegionLines } from '../src/term/viewmodel/selector.js'
+import { effortCellHex, effortLevelHex } from '../src/term/viewmodel/model-effort.js'
 import { getTheme } from '../src/render/theme/index.js'
 
 /** A theme hex as the truecolor SGR sequence the renderer emits for it. */
@@ -279,17 +280,31 @@ describe('effort column rendering', () => {
     expect(focused).not.toContain('→')
   })
 
-  test('the gesture is named only while a row with a ladder is focused', () => {
-    expect(rows(modelWindow()).join('\n')).toContain('Effort: High · ←/→ to adjust')
-    expect(rows(modelWindow('adaptive')).join('\n')).not.toContain('Effort:')
+  test('the footer names the model and tier, and offers ←→ only on a row with a ladder', () => {
+    const withLadder = rows(modelWindow()).join('\n')
+    expect(withLadder).toContain('Model: claude-sonnet-5 · High')
+    expect(withLadder).toContain('↑↓ select · ←→ reasoning effort · ↵ confirm · esc cancel')
+    const noLadder = rows(modelWindow('adaptive')).join('\n')
+    expect(noLadder).toContain('Model: adaptive')
+    expect(noLadder).not.toContain('reasoning effort')
+    expect(noLadder).toContain('↑↓ select · ↵ confirm · esc cancel')
   })
 
-  test('a preview reports the tier but does not name a gesture it cannot serve', () => {
-    // While the composer owns the line, ←/→ move the text cursor. Naming them
-    // here would advertise a gesture that does something else entirely.
+  test('a preview reports the tier but names no gesture it cannot serve', () => {
     const preview = rows(createModelWindow(config, 'claude-sonnet-5'), 80, false).join('\n')
-    expect(preview).toContain('Effort: High')
-    expect(preview).not.toContain('to adjust')
+    expect(preview).toContain('Model: claude-sonnet-5 · High')
+    expect(preview).not.toContain('reasoning effort')
+    expect(preview).not.toContain('↵ confirm')
+  })
+
+  test('the footer height does not change as focus crosses rows with and without ladders', () => {
+    for (const active of [true, false]) {
+      const heights = new Set<number>()
+      for (const model of ['claude-sonnet-5', 'claude-haiku', 'adaptive']) {
+        heights.add(buildSelectorRegionLines(createModelWindow(config, model, active), 80, 24, active).length)
+      }
+      expect(heights.size).toBe(1)
+    }
   })
 
   test('the whole column drops rather than truncating a gauge', () => {
@@ -350,7 +365,7 @@ describe('gauge glyph width safety', () => {
 })
 
 describe('effort column colours', () => {
-  const { brandHex, mutedHex, subtleHex, accentHex, selectionBgHex, selectionMutedHex } = getTheme()
+  const { brandHex, mutedHex, subtleHex, accentHex, selectionBgHex, selectionMutedHex, effortRampHex } = getTheme()
 
   // Asserting SGR requires a colour level; bun test has no TTY, so chalk would
   // otherwise emit bare text and every colour assertion would pass vacuously.
@@ -364,12 +379,29 @@ describe('effort column colours', () => {
     return rawRows(state).find(row => stripAnsi(row).includes(label))!
   }
 
-  test('the focused row paints gauge and tier in brand on the selection band', () => {
+  test('the focused row paints lit cells along the ramp on the selection band', () => {
     const row = rawRowFor(modelWindow(), 'claude-sonnet-5')
     expect(row).toContain(bgSgr(selectionBgHex))
-    expect(row).toContain(fg(brandHex))
+    // Five tiers at `high`: cells 0..3 sample ramp stops 0, 1, 3 and 4.
+    for (const stop of [0, 1, 3, 4]) expect(row).toContain(fg(effortRampHex[stop]!))
+    expect(row).not.toContain(fg(effortRampHex[5]!))
     // Secondary cells sit on the band, where plain dim gray goes too dark.
     expect(row).toContain(fg(selectionMutedHex))
+  })
+
+  test('the tier label takes the hue of its top cell, in the row and the footer', () => {
+    const high = fg(effortCellHex(3, 5))
+    const row = rawRowFor(modelWindow(), 'claude-sonnet-5')
+    expect(row.slice(0, row.indexOf('High'))).toEndWith(high)
+    const footer = rawRows(modelWindow()).find(text => stripAnsi(text).includes('Model: claude-sonnet-5'))!
+    expect(footer.slice(0, footer.indexOf('High'))).toEndWith(high)
+    expect(fg(effortLevelHex({ levels: LADDER, index: 4 }))).toBe(fg(effortRampHex.at(-1)!))
+    expect(fg(effortLevelHex({ levels: LADDER, index: 0 }))).toBe(fg(effortRampHex[0]!))
+  })
+
+  test('a short ladder reaches the same top hue as a long one', () => {
+    expect(effortCellHex(2, 3)).toBe(effortCellHex(4, 5))
+    expect(effortCellHex(0, 1)).toBe(effortRampHex[0])
   })
 
   test('an idle gauge stays gray so blue reads as "this is the current row"', () => {
@@ -390,9 +422,7 @@ describe('effort column colours', () => {
     expect(rawRowFor(modelWindow(), 'Evot Premium')).toContain(fg(accentHex))
   })
 
-  test('the affordances share the accent of the gauge they move', () => {
-    // Measured from Devin: the arrows are `--accent-primary`, the same token as
-    // the filled cells and the tier label, not a step below them.
+  test('the affordances keep the brand hue', () => {
     const row = rawRowFor(modelWindow(), 'claude-sonnet-5')
     const arrowAt = row.indexOf('←')
     expect(row.slice(0, arrowAt)).toEndWith(fg(brandHex))
@@ -416,18 +446,15 @@ describe('effort column colours', () => {
     expect(idle).toContain(fg(subtleHex))
     expect(mutedHex).not.toBe(subtleHex)
 
-    // On the current row the filled cells take the accent, empty stays subtle.
+    // On the current row the filled cells take the ramp, empty stays subtle.
     const focused = rawRowFor(modelWindow(), 'claude-sonnet-5')
-    expect(focused).toContain(fg(brandHex))
+    expect(focused).toContain(fg(effortRampHex[0]!))
     expect(focused).toContain(fg(subtleHex))
   })
 
   test('one glyph, two tones: the lit count is the tier, not the glyph', () => {
     // Filled and empty are both `◼`, so the reading lives entirely in colour.
     // Devin does the same; a hollow `□` would break the ladder's even pitch.
-    /** Gauge cells painted in `hex`, summed over every span using that colour.
-     *  Summed rather than first-match: the brand colour also paints the `·`
-     *  pointer and the tier label, and neither carries a gauge cell. */
     const lit = (row: string, hex: string): number => {
       let total = 0
       for (const chunk of row.split(fg(hex)).slice(1)) {
@@ -436,15 +463,17 @@ describe('effort column colours', () => {
       }
       return total
     }
+    const litOnRamp = (row: string): number =>
+      effortRampHex.reduce((sum, hex) => sum + lit(row, hex), 0)
 
-    // claude-sonnet-5 sits at `high`: 4 of 5 cells lit in brand.
+    // claude-sonnet-5 sits at `high`: 4 of 5 cells lit along the ramp.
     const focused = rawRowFor(modelWindow(), 'claude-sonnet-5')
-    expect(lit(focused, brandHex)).toBe(4)
+    expect(litOnRamp(focused)).toBe(4)
     expect(lit(focused, subtleHex)).toBe(1)
 
     // Moving down a tier moves one cell from lit to unlit, same total.
     const lower = rawRowFor(selectorAdjustEffort(modelWindow(), -1), 'claude-sonnet-5')
-    expect(lit(lower, brandHex)).toBe(3)
+    expect(litOnRamp(lower)).toBe(3)
     expect(lit(lower, subtleHex)).toBe(2)
   })
 })

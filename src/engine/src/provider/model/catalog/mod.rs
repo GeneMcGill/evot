@@ -6,6 +6,7 @@
 mod anthropic;
 mod deepseek;
 mod glm;
+mod google;
 mod kimi;
 mod openai;
 mod profile;
@@ -24,11 +25,13 @@ pub(super) fn resolve(id: &str) -> Option<ModelCapabilities> {
         .or_else(|| anthropic::resolve(id))
         .or_else(|| deepseek::resolve(id))
         .or_else(|| glm::resolve(id))
+        .or_else(|| google::resolve(id))
         .or_else(|| kimi::resolve(id))
         .or_else(|| xai::resolve(id))
         .or_else(|| openai::fallback(id))
         .or_else(|| anthropic::fallback(id))
         .or_else(|| glm::fallback(id))
+        .or_else(|| google::fallback(id))
         .or_else(|| deepseek::fallback(id))
         .or_else(|| kimi::fallback(id))
         .or_else(|| xai::fallback(id))
@@ -43,6 +46,7 @@ pub(super) fn normalize_model_id(model_id: &str) -> String {
         "x-ai/",
         "anthropic/",
         "deepseek/",
+        "google/",
         "zai/",
         "z-ai/",
         "moonshotai/",

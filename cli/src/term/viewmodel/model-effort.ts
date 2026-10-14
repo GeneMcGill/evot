@@ -61,6 +61,21 @@ export function effortLabel(level: string): string {
   return EFFORT_LABELS[level] ?? (level ? level[0]!.toUpperCase() + level.slice(1) : '')
 }
 
+/** Ramp hue for cell `index` of a `levels`-tier ladder, sampled by relative
+ *  position so a short ladder's top cell is as warm as a long one's. */
+export function effortCellHex(index: number, levels: number): string {
+  const { effortRampHex, brandHex } = getTheme()
+  if (effortRampHex.length === 0) return brandHex
+  const span = Math.max(1, levels - 1)
+  const at = Math.round((Math.min(Math.max(index, 0), span) / span) * (effortRampHex.length - 1))
+  return effortRampHex[at] ?? brandHex
+}
+
+/** Hue for the selected tier: the colour of the highest lit cell. */
+export function effortLevelHex(effort: SelectorEffort): string {
+  return effortCellHex(effort.index, effort.levels.length)
+}
+
 /** Planned column geometry shared by every row on the page. */
 export interface EffortLayout {
   /** Column where the gauge block starts, measured from the line start. */
@@ -138,8 +153,14 @@ export function buildEffortCell(
   const canLeft = showArrows && effort.index > 0
   const canRight = showArrows && effort.index < effort.levels.length - 1
 
-  const filled = GAUGE_CELL.repeat(effort.index + 1)
   const empty = GAUGE_CELL.repeat(Math.max(0, effort.levels.length - effort.index - 1))
+  // Focused: each lit cell takes its ramp stop. Idle rows stay grey.
+  const lit: StyledSpan[] = focused
+    ? Array.from({ length: effort.index + 1 }, (_, at) => ({
+      text: GAUGE_CELL, hex: effortCellHex(at, effort.levels.length), bold: true, ...band,
+    }))
+    : [{ text: GAUGE_CELL.repeat(effort.index + 1), hex: mutedHex }]
+  const levelHex = effortLevelHex(effort)
   // Short ladders pad before the right affordance, so both arrows sit at a fixed
   // column on every row (measured from Devin: a 3-cell ladder's `→` lands in the
   // same column as a 6-cell one's).
@@ -148,19 +169,14 @@ export function buildEffortCell(
 
   return [
     quiet(' '.repeat(pad)),
-    // Devin paints the affordances in the same accent as the gauge they move,
-    // not a step below it (measured: `--accent-primary`, same as the tier text).
     canLeft ? loud(ARROW_LEFT, brandHex) : quiet(' '),
     quiet(' '.repeat(ARROW_GAP)),
-    // One glyph, two tones: filled `--text-secondary` vs empty `--border-default`
-    // idle, filled `--accent-primary` when current. The seam between cells is the
-    // glyph's own side bearing, so it stays identical across both tones.
-    focused ? loud(filled, brandHex) : { text: filled, hex: mutedHex },
+    ...lit,
     { text: empty, hex: subtleHex, ...band },
     quiet(slack),
     quiet(' '.repeat(ARROW_GAP)),
     canRight ? loud(ARROW_RIGHT, brandHex) : quiet(' '),
     quiet(' '.repeat(LABEL_GAP)),
-    focused ? loud(label, brandHex) : quiet(label),
+    focused ? loud(label, levelHex) : quiet(label),
   ]
 }

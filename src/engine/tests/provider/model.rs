@@ -223,6 +223,33 @@ fn grok_profiles_match_xai_contracts() {
 }
 
 #[test]
+fn gemini_4_argon_profile_matches_models_dev_contract() {
+    use evotengine::ThinkingLevel::*;
+
+    for id in ["gemini-4-argon", "google/gemini-4-argon"] {
+        let argon = ModelConfig::openai(id, "Gemini 4 Argon");
+        assert_eq!(argon.context_window(), 1_015_808, "{id}");
+        assert_eq!(argon.advertised_context_window(), 1_048_576, "{id}");
+        assert_eq!(argon.max_tokens(), 32_768, "{id}");
+        assert_eq!(argon.input(), [InputModality::Text, InputModality::Image]);
+        assert_eq!(argon.supported_thinking_levels(), vec![Low, Medium, High]);
+        assert_eq!(argon.default_thinking_level(), Medium, "{id}");
+        assert!(!argon.can_disable_thinking(), "{id}");
+        assert_eq!(argon.clamp_thinking_level(Xhigh), High, "{id}");
+        assert_eq!(argon.effective_thinking_level(Off), Low, "{id}");
+    }
+
+    // Uncatalogued Gemini 4+ ids inherit Argon; Gemini 3.x does not.
+    let successor = ModelConfig::openai("gemini-4.1-krypton", "Gemini 4.1");
+    assert_eq!(successor.advertised_context_window(), 1_048_576);
+    assert_eq!(successor.supported_thinking_levels(), vec![
+        Low, Medium, High
+    ]);
+    let legacy = ModelConfig::openai("gemini-3.5-flash", "Gemini 3.5 Flash");
+    assert!(!legacy.reasoning());
+}
+
+#[test]
 fn kimi_profiles_match_catalog_contracts() {
     for id in ["k2p7", "kimi-for-coding", "kimi-for-coding-highspeed"] {
         let config = ModelConfig::anthropic(id, id);

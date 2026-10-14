@@ -33,6 +33,8 @@ export function darkTheme(): Theme {
     // Devin's `--border-default` (#444444) for a gauge's unfilled cells: dark
     // enough to read as an empty slot, light enough to still show the ladder.
     subtleHex: '#4a4a4a',
+    // Green → amber → coral → violet, as in Devin's pricing bar; avoids accentHex.
+    effortRampHex: ['#8ccf7e', '#c9d36a', '#e9c26e', '#f0a06a', '#e58a8a', '#c58ad7'],
     selectionBgHex: '#2c2f4a',
     selectionMutedHex: '#9aa0b4',
 
