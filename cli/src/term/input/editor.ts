@@ -1,4 +1,4 @@
-import { complete, getGhostHint } from '../../commands/completion.js'
+import { complete, getGhostHint, type GhostHintContext } from '../../commands/completion.js'
 import { COMMANDS, HIDDEN_COMMANDS } from '../../commands/index.js'
 import { needsContinuation } from './continuation.js'
 import {
@@ -289,11 +289,23 @@ function completionCandidate(value: string): CompletionCandidate {
   }
 }
 
+/**
+ * Session facts the ghost hint depends on. The editor is a pure state
+ * machine fed by keystrokes; the REPL sets this when the session or its fork
+ * ancestry changes so the next refresh picks it up without threading a
+ * context through every mutator.
+ */
+let ghostHintContext: GhostHintContext = { forked: false }
+
+export function setGhostHintContext(context: GhostHintContext): void {
+  ghostHintContext = context
+}
+
 export function refreshGhostHint(state: EditorState): EditorState {
   const currentLine = state.lines[state.cursorLine]!
   return {
     ...state,
-    ghostHint: getGhostHint(currentLine, state.cursorCol) ?? '',
+    ghostHint: getGhostHint(currentLine, state.cursorCol, ghostHintContext) ?? '',
   }
 }
 

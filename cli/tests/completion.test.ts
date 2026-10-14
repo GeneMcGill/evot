@@ -141,6 +141,17 @@ describe('ghost hints', () => {
     expect(hint).not.toContain('restart')
   })
 
+  test('bare slash offers back only once the session has a fork parent', () => {
+    expect(getGhostHint('/', 1)).not.toContain('back')
+    expect(getGhostHint('/', 1, { forked: false })).not.toContain('back')
+    expect(getGhostHint('/', 1, { forked: true })).toContain('fork  back  model')
+  })
+
+  test('back stays prefix-completable in a root session', () => {
+    expect(getGhostHint('/ba', 3)).toContain('ck')
+    expect(getGhostHint('/back ', 6)).toContain('<levels>')
+  })
+
   test('short resume prefixes do not advertise hidden restart', () => {
     for (const prefix of ['/re', '/res']) {
       const hint = getGhostHint(prefix, prefix.length)

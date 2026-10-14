@@ -15,6 +15,12 @@ export interface SlashCommand {
    * neither the run nor the session. Arguments are refused separately.
    */
   runSafe?: boolean
+  /**
+   * Only advertise in the bare `/` hint while the session has a fork parent.
+   * The command stays runnable and prefix-completable at all times; this
+   * keeps the one-line hint to things that can do something right now.
+   */
+  hintWhenForked?: boolean
 }
 
 export const COMMANDS: SlashCommand[] = [
@@ -22,7 +28,7 @@ export const COMMANDS: SlashCommand[] = [
   { name: '/resume', aliases: ['/sessions'], description: 'Resume a session (task runs in /task)', usage: '/resume [id | query [--days N | --since 2w | --all] | --all]', handler: 'builtin' },
   { name: '/new', description: 'Start a new session', handler: 'builtin' },
   { name: '/fork', description: 'Fork this session into a new one that inherits its context', usage: '/fork [title]', handler: 'builtin' },
-  { name: '/back', description: 'Return to the session this one was forked from', usage: '/back [levels]', handler: 'builtin' },
+  { name: '/back', description: 'Return to the session this one was forked from', usage: '/back [levels]', handler: 'builtin', hintWhenForked: true },
   { name: '/model', description: 'Show or change model', usage: '/model [name]', handler: 'builtin' },
   { name: '/plan', description: 'Enter planning mode', handler: 'builtin' },
   { name: '/task', description: 'Manage scheduled tasks, or import a shared one', usage: '/task [prompt | share-link]', handler: 'builtin' },

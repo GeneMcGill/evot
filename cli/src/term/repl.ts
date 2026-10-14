@@ -68,6 +68,7 @@ import {
   closeCompletion,
   moveCompletion,
   refreshGhostHint,
+  setGhostHintContext,
   createHistoryState,
   pushHistory,
   historyPrev,
@@ -2052,6 +2053,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
     let lineage: SessionMeta[] = []
     try { lineage = await agent.sessionLineage(id) } catch {}
     lastLineage = lineage
+    setGhostHintContext({ forked: lineage.length > 1 })
     const cloud = lineage.find(meta => meta.session_id === id)?.cloud
     appState = {
       ...appState,
@@ -3344,6 +3346,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
       sessionHook.endSession('new_session')
       sessionId = null
       lastLineage = []
+      setGhostHintContext({ forked: false })
       appState = { ...createInitialState(appState.model, agent.cwd) }
       gitInfo.setCwd(agent.cwd)
       renderer.clearScreen()

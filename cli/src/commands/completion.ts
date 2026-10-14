@@ -52,15 +52,23 @@ export function complete(line: string, cursorCol: number): CompletionResult | nu
   return null
 }
 
+/** What the bare `/` hint may assume about the session it is typed into. */
+export interface GhostHintContext {
+  /** The session has a fork parent, so `/back` can actually go somewhere. */
+  forked: boolean
+}
+
+const ROOT_SESSION: GhostHintContext = { forked: false }
+
 /**
  * Compute inline ghost hint for the current input.
  * Returns gray text to show after the cursor (Rust REPL style).
  *
- * - Bare `/` → compact list of all visible commands
+ * - Bare `/` → compact list of visible commands that apply right now
  * - `/he` → `lp — Show help` (single match: completion + description)
  * - `/skill ` → `[install  list  remove]` (sub-command hints)
  */
-export function getGhostHint(line: string, cursorCol: number): string {
+export function getGhostHint(line: string, cursorCol: number, context: GhostHintContext = ROOT_SESSION): string {
   const beforeCursor = line.slice(0, cursorCol)
   const afterCursor = line.slice(cursorCol)
 
@@ -77,9 +85,10 @@ export function getGhostHint(line: string, cursorCol: number): string {
     return getSubCommandHint(cmd, partial)
   }
 
-  // Bare `/` → show all visible command names
+  // Bare `/` → the visible commands that can act in this session
   if (cmd === '/') {
-    return `  [${COMMANDS.map(c => c.name.slice(1)).join('  ')}]`
+    const names = COMMANDS.filter(c => !c.hintWhenForked || context.forked).map(c => c.name.slice(1))
+    return `  [${names.join('  ')}]`
   }
 
   const matches = commandCandidates().filter(candidate => prefixMatches(candidate, cmd))
