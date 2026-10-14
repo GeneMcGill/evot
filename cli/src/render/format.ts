@@ -140,20 +140,10 @@ export function formatElapsed(ms: number): string {
   return restMinutes === 0 ? `${hours}h` : `${hours}h ${restMinutes}m`
 }
 
-export function formatClock24(timestamp: number): string {
+export function formatWallClock(timestamp: number): string {
   const at = new Date(timestamp)
   const pad = (n: number) => String(n).padStart(2, '0')
   return `${pad(at.getHours())}:${pad(at.getMinutes())}:${pad(at.getSeconds())}`
-}
-
-export function formatWallClock(timestamp: number): string {
-  const at = new Date(timestamp)
-  const hours = at.getHours()
-  const suffix = hours < 12 ? 'AM' : 'PM'
-  const hour12 = hours % 12 === 0 ? 12 : hours % 12
-  const hh = String(hour12).padStart(2, '0')
-  const mm = String(at.getMinutes()).padStart(2, '0')
-  return `${hh}:${mm} ${suffix}`
 }
 
 export function renderBar(value: number, max: number, width: number): string {  width = repeatCount(width)

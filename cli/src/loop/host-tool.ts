@@ -9,7 +9,7 @@ import {
 import type { LoopController } from './controller.js'
 import { MIN_DELAY_SECONDS, MAX_DELAY_SECONDS } from './controller.js'
 import { formatDuration } from './parser.js'
-import { formatClock24 } from '../render/format.js'
+import { formatWallClock } from '../render/format.js'
 
 export const SCHEDULE_WAKEUP_SPEC = {
   name: 'schedule_wakeup',
@@ -73,7 +73,7 @@ function dispatchScheduleWakeup(call: HostToolCall, controller: LoopController):
   }
   if (!reason) return errorResponse(call, 'reason is required.')
   const applied = controller.schedule({ delaySeconds: delay, reason, noop: args.noop === true })
-  const at = formatClock24(Date.now() + applied * 1000)
+  const at = formatWallClock(Date.now() + applied * 1000)
   const clamped = applied !== Math.round(delay) ? ` (adjusted from ${Math.round(delay)}s)` : ''
   return textResponse(call, `Next wakeup in ${formatDuration(applied * 1000)} at ${at}${clamped}.`)
 }

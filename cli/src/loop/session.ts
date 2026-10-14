@@ -3,7 +3,7 @@ import { LoopController, type LoopSnapshot, type RunOutcome, type StopCause } fr
 import { createLoopExtension } from './host-tool.js'
 import { formatDuration, parseLoopArgs, type LoopCommand } from './parser.js'
 import { buildLoopStartPrompt, buildLoopWakeupPrompt } from './prompt.js'
-import { formatClock24 as clock } from '../render/format.js'
+import { formatWallClock as clock } from '../render/format.js'
 
 export interface LoopSessionDeps {
   runTurn: (userLine: string | null, prompt: string, extension: HostToolExtension) => void

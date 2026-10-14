@@ -75,7 +75,7 @@ describe('buildOutputBlocks', () => {
   test('a timestamped user message shows the clock above the text', () => {
     const at = new Date(2026, 7, 31, 18, 11).getTime()
     const rows = contentRows(renderPlain([{ id: 'u1', kind: 'user', text: 'hello', timestamp: at }]))
-    expect(rows[0]).toBe('┃ [06:11 PM]')
+    expect(rows[0]).toBe('┃ [18:11:00]')
     expect(rows[1]).toBe('┃ hello')
   })
 
@@ -85,7 +85,7 @@ describe('buildOutputBlocks', () => {
       [{ id: 'u1', kind: 'user', text: 'a'.repeat(40), timestamp: at }],
       20,
     ).split('\n').slice(1)
-    expect(stripAnsi(rendered[1]!).trimEnd()).toBe('┃ [06:05 AM]')
+    expect(stripAnsi(rendered[1]!).trimEnd()).toBe('┃ [06:05:00]')
     for (const row of rendered) expect(stringWidth(stripAnsi(row))).toBe(20)
   })
 
