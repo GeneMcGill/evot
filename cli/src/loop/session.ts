@@ -109,10 +109,13 @@ export class LoopSession {
     return `◌ loop · ${mode} · tick ${snapshot.tick} · ${next}${noop} · since ${clock(snapshot.startedAt)}${reason}`
   }
 
-  waitLine(now = Date.now()): string | null {
+  /** The next wakeup as the status-line badge shows it: the `19m37s` label
+   *  and the raw remaining time, so the footer can tone the final minute;
+   *  null while a run is in flight or no loop is active. */
+  waitRemaining(now = Date.now()): { label: string; remainingMs: number } | null {
     const remaining = this.#controller.remainingMs(now)
     if (remaining === null) return null
-    return `◌ loop · next wakeup in ${formatDuration(remaining)} (${clock(now + remaining)})`
+    return { label: formatDuration(remaining), remainingMs: remaining }
   }
 
   dispose(): void {

@@ -1597,6 +1597,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
       backgroundStopPending: interaction.interruptPending,
       busy: isLoading,
       queuedCount: queuedUserMessages.length + queuedCompactionSubmissions.length,
+      loopWait: !isLoading && loopSession.waiting ? loopSession.waitRemaining() ?? undefined : undefined,
     })
   }
 
@@ -1810,15 +1811,11 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
         // Separating blank above the status row; queue rows bring their own.
         marginTop: 1,
       }
-    } else if (!isLoading && overlay.kind !== 'ask-user' && loopSession.waiting) {
-      const loopLine = loopSession.waitLine()
-      if (loopLine) {
-        spinnerBlock = {
-          lines: wrapTextWithAnsi(chalk.dim(loopLine), renderer.termCols).map(text => ({ spans: [{ text }] })),
-          marginTop: 1,
-        }
-      }
     } else if (backgroundWaitSince !== null && overlay.kind !== 'ask-user') {
+      // A loop parked between ticks draws no row here: the wakeup card in the
+      // transcript says why and when, and the countdown rides on the prompt
+      // footer as the `◌ loop` badge. Only a background wait earns a row.
+      //
       // Idle, but a detached task is still running and will wake the agent when
       // it finishes. Without a status row here the transcript looks finished, so
       // a user watching a long build would conclude the work had stopped.

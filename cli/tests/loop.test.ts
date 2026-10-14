@@ -272,6 +272,19 @@ describe('LoopSession', () => {
     s.dispose()
   })
 
+  test('waitRemaining is the countdown between ticks and null while running', () => {
+    const { s } = session()
+    const t0 = Date.now()
+    s.handleCommand('/loop 20m x', '20m x')
+    expect(s.waitRemaining(t0)).toBeNull()
+    s.endRun('ok')
+    expect(s.waiting).toBe(true)
+    const wait = s.waitRemaining(t0 + 23_000)
+    expect(wait?.label).toMatch(/^19m3\ds$/)
+    expect(wait?.remainingMs).toBeGreaterThan(19 * 60_000)
+    s.dispose()
+  })
+
   test('endRun error streak stops with notice', () => {
     const { s, notices } = session()
     s.handleCommand('/loop 1m x', '1m x')

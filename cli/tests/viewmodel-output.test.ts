@@ -367,7 +367,10 @@ describe('buildOutputBlocks', () => {
     ])
     const lines = result.split('\n')
     const pruneIdx = lines.findIndex(l => l.includes('jev prune'))
-    expect(lines[pruneIdx - 1]).toBe('')
+    // The card leads with its own padded blank row, like any tool card.
+    expect(lines[pruneIdx - 1]!.trim()).toBe('')
+    expect(lines[pruneIdx]).toContain('✂ jev prune  26k → 11k')
+    expect(lines[pruneIdx + 1]).toContain('✓ · removed 1 · truncated 2')
   })
 
   test('long tool command wraps instead of truncating', () => {

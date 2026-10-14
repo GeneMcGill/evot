@@ -798,8 +798,11 @@ describe('buildVerboseEvent', () => {
     expect(isVisibleEvent(completed)).toBe(true)
 
     const card = buildEventCard(completed)
-    expect(card[0]!.text).toBe('✦ compact')
+    expect(card[0]!.text).toBe('✦ compact  168k → 24k')
+    expect(card[0]!.toolCard).toEqual({ state: 'success', first: true, last: false })
     expect(card[1]!.text).toContain('✓ · remote')
+    expect(card[1]!.text).not.toContain('msgs')
+    expect(card.at(-1)!.toolCard?.last).toBe(true)
   })
 
   test('shows remote fallback but keeps skipped compaction log-only', () => {
@@ -853,7 +856,7 @@ describe('buildVerboseEvent', () => {
     expect(pruned).not.toContain('reclaimed')
     expect(lines.at(-1)).toBe('    summary   removed 86 stale tool msgs')
     const card = buildEventCard(pruned)
-    expect(card[0]!.text).toBe('✦ compact')
+    expect(card[0]!.text).toBe('✦ compact  74k → 32k')
     expect(card[1]!.text).toContain('jev prune · no summary')
   })
 })

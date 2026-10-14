@@ -13,7 +13,7 @@ import { line, block, plain, dim, colored, type ViewBlock, type StyledLine, type
 import { finiteSize, spansWidth, truncateTailToWidth, truncateToWidth } from './width.js'
 import { BACKGROUND_PANEL_HINT_CHORD } from '../app/background-panel.js'
 import { FORK_GLYPH, formatForkTrail } from './fork-trail.js'
-import { GAUGE_CELL, effortCellHex, effortLabel, effortLevelHex } from './model-effort.js'
+import { GAUGE_CELL, effortCellHex, effortLabel } from './model-effort.js'
 import { getTheme } from '../../render/theme/index.js'
 
 /** The subset of prompt state the footer reads. */
@@ -39,6 +39,13 @@ export interface PromptFooterVM {
    *  is on. Shown as a badge so the user knows the context is being pruned,
    *  not only summarised. */
   judge?: string
+  /**
+   * Countdown to the next `/loop` wakeup while the agent is parked between
+   * ticks. The loop's decision (why it waits, when) is a card in the
+   * transcript; this is only its progress, so it rides on the status line next
+   * to the other runtime badges instead of taking a row of its own.
+   */
+  loopWait?: LoopWait
   backgroundProcessCount: number
   backgroundStopHint?: string
   backgroundStopPending?: boolean
@@ -96,6 +103,33 @@ function buildForkTrail(trail: readonly string[], columns: number): StyledLine |
   return line(colored(FORK_GLYPH, 'cyan'), dim(` ${text}`))
 }
 
+export interface LoopWait {
+  /** Countdown as the badge prints it, e.g. `19m37s`. */
+  label: string
+  /** Milliseconds until the wakeup; drives the "about to wake" tone. */
+  remainingMs: number
+}
+
+/** Under a minute the loop is about to wake and the badge says so in the
+ *  attention tone; above that it is just another runtime badge. */
+const LOOP_WAKE_SOON_MS = 60_000
+
+/**
+ * The footer speaks in three tones and nothing else:
+ *
+ *   dim      facts that rarely change: cwd, model, context figures, dashboard
+ *   runtime  things evot itself is doing right now: judge prune, loop wait,
+ *            background shells. One hue, the brand, so they read as one family
+ *   warn     what needs the user: context pressure (yellow/red), loop about to
+ *            wake (yellow)
+ *
+ * Anything else would be a fourth colour competing for the eye on a line that
+ * is meant to be glanced at, not read.
+ */
+function runtime(text: string): StyledSpan {
+  return { text, hex: getTheme().brandHex }
+}
+
 /**
  * The background-work chip above the footer.
  *
@@ -138,17 +172,24 @@ function buildBackgroundChip(
     const start = clipped.indexOf(stopHint)
     if (start < 0) return line(confirmationHint(truncateToWidth(stopHint, columns), stopPending))
     return line(
-      colored(clipped.slice(0, start), 'cyan'),
+      runtime(clipped.slice(0, start)),
       confirmationHint(stopHint, stopPending),
       dim(clipped.slice(start + stopHint.length)),
     )
   }
   if (downAvailable && stringWidth(`${label} · ${hint}`) <= columns) {
-    return line(colored(label, 'cyan'), dim(' · '), dim(hint))
+    return line(runtime(label), dim(' · '), dim(hint))
   }
-  if (stringWidth(label) <= columns) return line(colored(label, 'cyan'))
-  if (stringWidth(shortLabel) <= columns) return line(colored(shortLabel, 'cyan'))
-  return line(colored(truncateTailToWidth(shortLabel, columns), 'cyan'))
+  if (stringWidth(label) <= columns) return line(runtime(label))
+  if (stringWidth(shortLabel) <= columns) return line(runtime(shortLabel))
+  return line(runtime(truncateTailToWidth(shortLabel, columns)))
+}
+
+/** `◌ loop 19m37s` in the runtime tone; the whole badge turns to the warn
+ *  tone for the final minute so the user sees the wakeup coming. */
+function loopWaitBadge(wait: LoopWait): StyledSpan[] {
+  const text = `◌ loop ${wait.label}`
+  return [wait.remainingMs <= LOOP_WAKE_SOON_MS ? colored(text, 'yellow') : runtime(text)]
 }
 
 function buildFooter(input: PromptFooterVM, columns: number, modeShownAbove: boolean): ViewBlock {
@@ -236,13 +277,14 @@ function buildFooterCandidate(
             : dim(text),
       ]
       // The badge rides with the context number it acts on.
-      if (input.judge) context.push(dim(' • '), colored('jev prune', 'cyan'))
+      if (input.judge) context.push(dim(' • '), runtime('jev prune'))
       groups.push(context)
     } else if (layout.context !== 'hidden' && input.judge) {
       // Before the first call there is no context number yet; the badge still
       // tells the user the branch is on.
-      groups.push([colored('jev prune', 'cyan')])
+      groups.push([runtime('jev prune')])
     }
+    if (input.loopWait) groups.push(loopWaitBadge(input.loopWait))
     return groups.flatMap((group, index) => index === 0 ? group : [dim(' │ '), ...group])
   }
 
@@ -260,19 +302,21 @@ function buildFooterCandidate(
 }
 
 /** `◼◼◼◼ medium`: the same ramp-lit ladder as the /model picker, so shift+tab
- *  shows its effect at a glance. Without a ladder, just the tier name. */
+ *  shows its effect at a glance. The ladder keeps the ramp because it is the
+ *  picker's signature; the tier word is a fact like the model name beside it
+ *  and stays dim, so the only saturated ink on the left is the few gauge
+ *  cells. Without a ladder, just the tier name. */
 function thinkingBadge(level: string, levels: readonly string[] | undefined): StyledSpan[] {
   const index = levels?.indexOf(level) ?? -1
   if (!levels || index < 0) return [dim(level === 'off' ? 'thinking off' : level)]
   const { subtleHex } = getTheme()
-  const effort = { levels, index }
   const lit: StyledSpan[] = Array.from({ length: index + 1 }, (_, at) =>
     ({ text: GAUGE_CELL, hex: effortCellHex(at, levels.length) }))
   const empty = GAUGE_CELL.repeat(levels.length - lit.length)
   return [
     ...lit,
     ...(empty ? [{ text: empty, hex: subtleHex }] : []),
-    { text: ` ${effortLabel(level).toLowerCase()}`, hex: effortLevelHex(effort) },
+    dim(` ${effortLabel(level).toLowerCase()}`),
   ]
 }
 

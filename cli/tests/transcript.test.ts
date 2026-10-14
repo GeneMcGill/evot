@@ -169,13 +169,13 @@ describe('transcript conversion', () => {
     })
 
     const collapsed = messagesToOutputLines(messages).map(line => line.text).join('\n')
-    expect(collapsed).toContain('✦ compact')
-    expect(collapsed).toContain('fallback  Upstream error 400: Store must be set to false')
+    expect(collapsed).toContain('✦ compact  12k → 5k')
+    expect(collapsed).toContain('  Upstream error 400: Store must be set to false')
     expect(collapsed).toContain('summary hidden (ctrl+o to expand)')
     expect(collapsed).not.toContain('summary text')
 
     const expanded = messagesToOutputLines(messages, true).map(line => line.text).join('\n')
-    expect(expanded).toContain('✦ compact')
+    expect(expanded).toContain('✦ compact  12k → 5k')
     expect(expanded).toContain('summary text')
   })
 

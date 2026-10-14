@@ -4,6 +4,7 @@ import { providerDisplayName } from '../app/provider.js'
 import { shouldDownOpenPanel } from '../app/background-panel.js'
 import { isEditorEmpty, type EditorState } from '../input/editor.js'
 import type { PromptVMInput } from './prompt.js'
+import type { LoopWait } from './prompt-footer.js'
 
 export interface PromptSnapshot {
   editor: EditorState
@@ -24,6 +25,8 @@ export interface PromptSnapshot {
   busy?: boolean
   /** Prompts queued behind the running turn. */
   queuedCount?: number
+  /** Countdown to the next `/loop` wakeup while parked between ticks. */
+  loopWait?: LoopWait
 }
 
 /** Pure projection of a single host snapshot. No agent, terminal or clocks. */
@@ -63,5 +66,6 @@ export function promptFromSnapshot(input: PromptSnapshot): PromptVMInput {
     thinkingLevel: config?.thinkingLevel ?? '',
     ...(active?.thinking_levels?.length ? { thinkingLevels: active.thinking_levels } : {}),
     judge: config?.judge,
+    loopWait: input.loopWait,
   }
 }

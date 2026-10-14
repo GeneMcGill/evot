@@ -825,7 +825,42 @@ export function buildLlmCard(text: string): OutputLine[] {
     const failure = providerFailurePresentation({ error: b })
     lines.push({ id: genId('tool-res'), kind: 'error', text: `  ${failure.label}` })
   }
-  return lines
+  return stampToolCard(lines, mark === '✗' ? 'error' : isRetry ? 'pending' : 'success')
+}
+
+/**
+ * Split a runtime event summary into the one figure that belongs on the
+ * headline and the metadata that belongs on the status row below it.
+ *
+ * Every runtime card (`jev prune`, `compact`, `llm`) takes the same shape as a
+ * tool card: `<glyph> <name>  <arg>` then `  ✓ · <meta>`. For context work the
+ * arg is the token transition (`70k → 63k`), the number the user scans for;
+ * the counts and the trigger are detail and go on the status row. The
+ * message-count transition and the parenthesised saving are dropped from the
+ * card: both repeat what the token transition and the context bar already
+ * say, and both remain in the verbose log.
+ */
+function splitEventSummary(head: string): { arg: string; meta: string[] } {
+  const parts = head.split(' · ').map(part => part.trim()).filter(part => part.length > 0)
+  const tokensIndex = parts.findIndex(part => /^\S+ → \S+(?: \(−\S+\))?$/u.test(part) && !part.endsWith('msgs'))
+  if (tokensIndex < 0) return { arg: '', meta: parts }
+  const arg = parts[tokensIndex]!.replace(/\s*\(−\S+\)$/u, '')
+  const meta = parts.filter((part, index) => index !== tokensIndex && !part.endsWith(' msgs'))
+  return { arg, meta }
+}
+
+function eventHeadline(glyph: string, name: string, arg: string): OutputLine {
+  return { id: genId('tool'), kind: 'tool', text: arg ? `${glyph} ${name}  ${arg}` : `${glyph} ${name}` }
+}
+
+function eventStatus(mark: string, meta: string[]): OutputLine {
+  return { id: genId('tool'), kind: 'tool', text: meta.length > 0 ? `  ${mark} · ${meta.join(' · ')}` : `  ${mark}` }
+}
+
+/** The context gauge row without the saving the headline already states. */
+function eventContextRow(line: string): OutputLine {
+  const body = line.replace(/^\s*context\s*/u, '').replace(/\s*\(−\S+\)(\s*·\s*jev prune)?\s*$/u, '').trim()
+  return { id: genId('tool-res'), kind: 'tool_result', text: `  ${body}` }
 }
 
 export function buildEventCard(text: string): OutputLine[] {
@@ -835,26 +870,29 @@ export function buildEventCard(text: string): OutputLine[] {
     const rawLines = text.split('\n')
     const applied = /^\[JEV\]\s+✂/u.test(rawLines[0] ?? '')
     const head = (rawLines[0] ?? '').replace(/^\[JEV\]\s+[✂·]?\s*·?\s*/u, '').trim()
+    const { arg, meta } = splitEventSummary(head)
     const lines: OutputLine[] = [
-      { id: genId('tool'), kind: 'tool', text: applied ? '✂ jev prune' : '⚖ jev judge' },
-      { id: genId('tool'), kind: 'tool', text: `  ${applied ? '✓' : '·'} · ${head}` },
+      eventHeadline(applied ? '✂' : '⚖', applied ? 'jev prune' : 'jev judge', arg),
+      eventStatus(applied ? '✓' : '·', meta),
     ]
     const context = rawLines.slice(1).find(line => /^\s*context\s/u.test(line))
-    if (context) lines.push({ id: genId('tool-res'), kind: 'tool_result', text: `  ${context.replace(/^\s*context\s*/u, '').trim()}` })
-    return lines
+    if (context) lines.push(eventContextRow(context))
+    return stampToolCard(lines, 'success')
   }
   if (text.startsWith('[COMPACT]')) {
     const rawLines = text.split('\n')
     const head = (rawLines[0] ?? '').replace(/^\[COMPACT\]\s+✓\s*·?\s*/u, '').trim()
-    const lines: OutputLine[] = [
-      { id: genId('tool'), kind: 'tool', text: '✦ compact' },
-      { id: genId('tool'), kind: 'tool', text: `  ✓ · ${head}` },
-    ]
+    const { arg, meta } = splitEventSummary(head)
+    const lines: OutputLine[] = [eventHeadline('✦', 'compact', arg), eventStatus('✓', meta)]
     for (const line of rawLines.slice(1)) {
-      const body = line.replace(/^\s*(context|summary)\s*/u, '').trim()
+      if (/^\s*context\s/u.test(line)) {
+        lines.push(eventContextRow(line))
+        continue
+      }
+      const body = line.replace(/^\s*(summary|fallback)\s*/u, '').trim()
       if (body) lines.push({ id: genId('tool-res'), kind: 'tool_result', text: `  ${body}` })
     }
-    return lines
+    return stampToolCard(lines, 'success')
   }
   return buildLlmCard(text)
 }

@@ -951,6 +951,43 @@ describe('prompt footer', () => {
     expect(off).not.toContain('jev')
   })
 
+  test('shows the loop countdown as a badge after the context group', () => {
+    const footer = blocksToLines(buildPromptFooterBlocks(defaultInput({
+      columns: 160,
+      contextTokens: 91100,
+      contextWindow: 1000000,
+      judge: 'jev-latest',
+      loopWait: { label: '19m37s', remainingMs: 19 * 60_000 + 37_000 },
+    }))).map(stripAnsi)[0]!
+    expect(footer).toContain('context: 9.1% (91.1k/1M) • jev prune │ ◌ loop 19m37s')
+    const idle = blocksToLines(buildPromptFooterBlocks(defaultInput({ columns: 160 }))).map(stripAnsi)[0]!
+    expect(idle).not.toContain('loop')
+  })
+
+  test('runtime badges share the brand tone; the loop turns yellow in its final minute', () => {
+    const { brandHex } = getTheme()
+    const render = (loopWait: { label: string; remainingMs: number }): string =>
+      blocksToLines(buildPromptFooterBlocks(defaultInput({ columns: 160, judge: 'jev-latest', loopWait })))[0]!
+    const parked = render({ label: '19m37s', remainingMs: 19 * 60_000 + 37_000 })
+    expect(parked).toContain(chalk.hex(brandHex)('jev prune'))
+    expect(parked).toContain(chalk.hex(brandHex)('◌ loop 19m37s'))
+    const soon = render({ label: '42s', remainingMs: 42_000 })
+    expect(soon).toContain(chalk.yellow('◌ loop 42s'))
+  })
+
+  test('the thinking tier word is dim; only the gauge cells carry the ramp', () => {
+    const { effortRampHex } = getTheme()
+    const raw = blocksToLines(buildPromptFooterBlocks(defaultInput({
+      columns: 160,
+      thinkingLevel: 'high',
+      thinkingLevels: ['low', 'medium', 'high'],
+    })))[0]!
+    expect(raw).toContain(chalk.hex(effortRampHex.at(-1)!)('◼'))
+    // The tier word takes the same tone as the model name beside it.
+    expect(raw).toContain(chalk.hex('#777777')(' high'))
+    expect(raw).not.toContain(chalk.hex(effortRampHex.at(-1)!)(' high'))
+  })
+
   test('carries no cache segment: per-call cache usage belongs to the spinner', () => {
     const footerAt = (columns: number) => blocksToLines(buildPromptFooterBlocks(defaultInput({
       columns,
