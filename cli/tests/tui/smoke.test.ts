@@ -764,7 +764,7 @@ describe.skipIf(!canRun)('evot binary smoke (PTY)', () => {
       session = await startEvot(false, false, false, `http://127.0.0.1:${server.port}/v1`)
       session.write('how long did this take\x0d')
       await session.waitFor('done thinking')
-      const footer = await session.waitFor(/✳ Ran for \d+s · \d+ turns? · done \d{2}:\d{2} (AM|PM)/)
+      const footer = await session.waitFor(/✳ Ran for \d+s · \d+ turns? · done \d{2}:\d{2}:\d{2}/)
       expect(footer).toMatch(/Ran for [1-9]\d*s · 1 turn ·/)
     } finally {
       if (session) await session.kill()
@@ -792,7 +792,7 @@ describe.skipIf(!canRun)('evot binary smoke (PTY)', () => {
       session = await startEvot(false, false, false, `http://127.0.0.1:${server.port}/v1`)
       session.write('run a command then answer\x0d')
       await session.waitFor('both turns done')
-      const footer = await session.waitFor(/✳ Ran for \d+s · \d+ turns? · done \d{2}:\d{2} (AM|PM)/)
+      const footer = await session.waitFor(/✳ Ran for \d+s · \d+ turns? · done \d{2}:\d{2}:\d{2}/)
       expect(footer).toMatch(/Ran for [1-9]\d*s · 2 turns ·/)
       expect(requests).toBeGreaterThanOrEqual(2)
     } finally {
@@ -815,7 +815,7 @@ describe.skipIf(!canRun)('evot binary smoke (PTY)', () => {
       await session.waitFor(/esc\s+again\s+to\s+interrupt/)
       session.write('\x1b')
       await session.waitFor('Interrupted.')
-      const footer = await session.waitFor(/✳ Ran for \d+s · \d+ turns? · done \d{2}:\d{2} (AM|PM)/)
+      const footer = await session.waitFor(/✳ Ran for \d+s · \d+ turns? · done \d{2}:\d{2}:\d{2}/)
       expect(footer).toMatch(/Ran for [1-9]\d*s · 1 turn ·/)
     } finally {
       if (session) await session.kill()
