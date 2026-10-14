@@ -30,7 +30,6 @@ export const COMMANDS: SlashCommand[] = [
   { name: '/fork', description: 'Fork this session into a new one that inherits its context', usage: '/fork [title]', handler: 'builtin' },
   { name: '/back', description: 'Return to the session this one was forked from', usage: '/back [levels]', handler: 'builtin', hintWhenForked: true },
   { name: '/model', description: 'Show or change model', usage: '/model [name]', handler: 'builtin' },
-  { name: '/plan', description: 'Enter planning mode', handler: 'builtin' },
   { name: '/task', description: 'Manage scheduled tasks, or import a shared one', usage: '/task [prompt | share-link]', handler: 'builtin' },
   { name: '/loop', description: 'Repeat a prompt in this session on an interval or self-paced until done', usage: '/loop [interval] <prompt> | stop | status', handler: 'builtin' },
   { name: '/share', description: 'List shared sessions; public/team/private shares this session; a share URL imports it', usage: '/share [public | team | private | off] [session-id | url]', handler: 'builtin' },
@@ -38,8 +37,11 @@ export const COMMANDS: SlashCommand[] = [
   { name: '/logout', description: 'Log out of evot cloud', handler: 'builtin' },
 ]
 
-/** Hidden commands — recognised but not shown in /help or ghost hints */
+/** Hidden commands — recognised but not shown in the bare `/` ghost hint */
 export const HIDDEN_COMMANDS: SlashCommand[] = [
+  // Planning mode is a toggle the model is steered into, not a destination the
+  // user reaches for from the prompt; /help still documents it.
+  { name: '/plan', description: 'Toggle planning mode', handler: 'builtin' },
   { name: '/restart', description: 'Restart evot in place', handler: 'builtin', minPrefixLength: 5 },
   { name: '/update', description: 'Update evot to latest version', handler: 'builtin' },
   { name: '/version', description: 'Show current version', handler: 'builtin', runSafe: true },

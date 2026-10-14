@@ -147,6 +147,11 @@ describe('ghost hints', () => {
     expect(getGhostHint('/', 1, { forked: true })).toContain('fork  back  model')
   })
 
+  test('bare slash leaves plan to /help; the prefix still completes it', () => {
+    expect(getGhostHint('/', 1)).not.toContain('plan')
+    expect(getGhostHint('/pl', 3)).toContain('an')
+  })
+
   test('back stays prefix-completable in a root session', () => {
     expect(getGhostHint('/ba', 3)).toContain('ck')
     expect(getGhostHint('/back ', 6)).toContain('<levels>')
