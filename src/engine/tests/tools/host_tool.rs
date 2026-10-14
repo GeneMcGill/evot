@@ -29,6 +29,7 @@ fn spec() -> HostToolSpec {
         parameters_schema: serde_json::json!({ "type": "object" }),
         prompt_snippet: Some("track a multi-step plan".into()),
         name_aliases: vec![("claude".into(), "Plan".into())],
+        ends_turn: false,
     }
 }
 

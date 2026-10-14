@@ -52,6 +52,10 @@ impl AgentTool for HostTool {
         self.spec.name_aliases.clone()
     }
 
+    fn ends_turn(&self) -> bool {
+        self.spec.ends_turn
+    }
+
     async fn execute(
         &self,
         params: serde_json::Value,

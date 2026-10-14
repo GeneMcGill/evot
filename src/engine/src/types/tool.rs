@@ -181,6 +181,14 @@ pub trait AgentTool: Send + Sync {
         vec![]
     }
 
+    /// A successful call settles the run: the loop records the result and
+    /// ends without asking the model for a follow-up response. For tools
+    /// whose result carries nothing the model should act on now (e.g.
+    /// scheduling a later wakeup). Default: false.
+    fn ends_turn(&self) -> bool {
+        false
+    }
+
     /// Resolve the tool name to present to a given model.
     fn resolve_name(&self, model: &str) -> String {
         let model_lower = model.to_lowercase();

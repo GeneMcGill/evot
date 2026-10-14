@@ -280,6 +280,7 @@ async fn run_loop(
         }
 
         let mut steering_after_tools: Option<Vec<AgentMessage>> = None;
+        let mut turn_settled = false;
 
         if !first_turn {
             tx.send(AgentEvent::TurnStart).await.ok();
@@ -584,6 +585,8 @@ async fn run_loop(
                 steering_after_tools = execution.steering_messages;
             }
 
+            turn_settled = settles_run(&context.tools, &tool_calls, &tool_results);
+
             for result in &tool_results {
                 let am: AgentMessage = result.clone().into();
                 context.messages.push(am.clone());
@@ -681,7 +684,7 @@ async fn run_loop(
             .as_ref()
             .map(|f| f())
             .unwrap_or_default();
-        if !pending.is_empty() || has_tool_calls {
+        if !pending.is_empty() || (has_tool_calls && !turn_settled) {
             continue;
         }
 
@@ -742,6 +745,30 @@ async fn run_loop(
     compaction_controller
         .map(|controller| controller.state().clone())
         .or_else(|| config.initial_compaction_state.clone())
+}
+
+/// A tool turn settles the run when every call went to an `ends_turn` tool
+/// and none of them failed. The results are recorded but the model is not
+/// asked for a follow-up: there is nothing new for it to act on, and some
+/// providers answer that prompt with an empty completion.
+fn settles_run(
+    tools: &[Box<dyn AgentTool>],
+    tool_calls: &[(String, String, serde_json::Value)],
+    tool_results: &[Message],
+) -> bool {
+    if tool_calls.is_empty() {
+        return false;
+    }
+    let all_end_turn = tool_calls.iter().all(|(_, name, _)| {
+        tools
+            .iter()
+            .find(|t| t.matches_call_name(name))
+            .is_some_and(|t| t.ends_turn())
+    });
+    all_end_turn
+        && tool_results
+            .iter()
+            .all(|r| !matches!(r, Message::ToolResult { is_error: true, .. }))
 }
 
 /// The judge-driven prune branch at run end: the run is over and the next

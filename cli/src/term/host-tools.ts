@@ -97,6 +97,31 @@ When there are no meaningful choices and you only need the user to type somethin
 
 export const HOST_TOOL_SPECS_JSON = JSON.stringify([ASK_USER_SPEC])
 
+export function composeExtensions(
+  ...extensions: Array<HostToolExtension | undefined>
+): HostToolExtension | undefined {
+  const present = extensions.filter((ext): ext is HostToolExtension => ext !== undefined)
+  if (present.length === 0) return undefined
+  if (present.length === 1) return present[0]
+  const seen = new Set<string>()
+  const specs: unknown[] = []
+  for (const ext of present) {
+    for (const spec of JSON.parse(ext.specsJson) as Array<{ name: string }>) {
+      if (seen.has(spec.name)) continue
+      seen.add(spec.name)
+      specs.push(spec)
+    }
+  }
+  return {
+    specsJson: JSON.stringify(specs),
+    handles: name => present.some(ext => ext.handles(name)),
+    dispatch: call => {
+      const owner = present.find(ext => ext.handles(call.tool_name))
+      return owner ? owner.dispatch(call) : Promise.resolve(errorResponse(call, `Unknown host tool: ${call.tool_name}`))
+    },
+  }
+}
+
 function isAskUserName(name: string): boolean {
   const lower = name.toLowerCase()
   return lower === ASK_USER_SPEC.name || lower === 'askuser'

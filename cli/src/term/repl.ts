@@ -98,6 +98,7 @@ import { handleSlashCommand } from './app/commands.js'
 import { askStateToResponse, prefixedAskLines } from './app/ask-user.js'
 import { RunOwnership } from './app/run-ownership.js'
 import {
+  composeExtensions,
   dispatchHostToolCall,
   HOST_TOOL_SPECS_JSON,
   type AskUserAnswer,
@@ -172,6 +173,7 @@ import { errorText } from '../render/format.js'
 import { buildRunFooterLine } from '../render/run-footer.js'
 import { RunThinking } from '../render/run-thinking.js'
 import { TaskSession } from '../task/session.js'
+import { LoopSession } from '../loop/session.js'
 import { ensureFeishuDelivery } from '../channels/feishu/setup.js'
 import { waitForSetup } from '../channels/setup-wait.js'
 import { TASK_RUNTIME_DEFAULT_MODEL } from '../task/types.js'
@@ -314,6 +316,19 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
     if (!isLoading) setTerminalTitle(backgroundWaitSince !== null ? '◌ bg' : '✳')
   }
   let shareSelector: ShareSelector | null = null
+  const loopSession = new LoopSession({
+    runTurn: (userLine, prompt, extension) => {
+      if (userLine) commitLines(buildUserMessage(userLine))
+      void runQuery(prompt, undefined, undefined, extension)
+    },
+    canWake: () => !isLoading && !destroyed
+      && queuedUserMessages.length + queuedCompactionSubmissions.length === 0
+      && overlay.kind !== 'ask-user',
+    notify: text => commitSystem('sys-loop', `  ${text}`),
+    requestRender: () => renderer.requestRender(),
+  })
+  resources.add(() => loopSession.dispose())
+
   const taskSession = new TaskSession({
     dimensions: () => ({ columns: renderer.termCols, rows: renderer.termRows }),
     envFile: opts.envFile,
@@ -1804,6 +1819,14 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
         lines: wrapTextWithAnsi(waitText, renderer.termCols).map(text => ({ spans: [{ text }] })),
         marginTop: 1,
       }
+    } else if (!isLoading && overlay.kind !== 'ask-user') {
+      const loopLine = loopSession.waitLine()
+      if (loopLine) {
+        spinnerBlock = {
+          lines: wrapTextWithAnsi(chalk.dim(loopLine), renderer.termCols).map(text => ({ spans: [{ text }] })),
+          marginTop: 1,
+        }
+      }
     }
 
     // Match pi's sibling order before editorContainer: pending messages, then
@@ -2058,6 +2081,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
 
   async function resumeSession(session: SessionMeta, notice?: OutputLine[]) {
     taskSession.cancelFlow()
+    loopSession.reset()
     try {
       const cloudNotice = await pullBeforeResume(session.session_id)
       const { transcript, model, provider, thinkingLevel, cwd: sessionCwd } = await prepareResume(agent, session)
@@ -2327,6 +2351,9 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
     hostToolExtension?: HostToolExtension,
   ) {
     if (queryBlockedByCloudLogin()) return
+    hostToolExtension = composeExtensions(hostToolExtension, loopSession.extension)
+    const loopRun = loopSession.active
+    if (loopRun) loopSession.beginRun()
     // Notification-only wakeups continue the same user task; don't hide its
     // newly completed background work when the engine reads the result.
     if (text || contentJson || prebuiltStream) backgroundTerminals.beginRun()
@@ -2483,6 +2510,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
         isLoading = false
         streamMachine = null
         stopSpinner()
+        if (loopRun) loopSession.endRun(completed ? 'ok' : 'error')
         commitRunFooter()
         if (taskSession.unfinishedFlow(hostToolExtension)) {
           commitSystem('sys-task-incomplete', '  Task change not saved yet · reply to continue editing, or /task cancel')
@@ -2748,6 +2776,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
 
   function interruptStream(id: string, text: string) {
     unfreezeTerminalTitle()
+    loopSession.reset('user')
     // Revoke ownership before aborting: native abort settles asynchronously,
     // and its rejected Promise must not later emit a second Interrupted/error
     // or clear a newer query that the user starts immediately afterward.
@@ -3256,6 +3285,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
     if (result.overlay) overlay = result.overlay
     if (result.clearContext) {
       taskSession.cancelFlow()
+      loopSession.reset()
       // Abort any in-flight streaming and clear local context view without switching sessions.
       if (isLoading && streamRef) {
         revokeRun()
@@ -3283,6 +3313,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
     }
     if (result.newSession) {
       taskSession.cancelFlow()
+      loopSession.reset()
       // Abort any in-flight streaming.
       if (isLoading && streamRef) {
         revokeRun()
@@ -3348,6 +3379,8 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
       } else {
         taskSession.create(text.trim(), args)
       }
+    } else if (name === '/loop') {
+      loopSession.handleCommand(text.trim(), args)
     } else if (name === '/compact') {
       await runManualCompaction(args)
     } else if (name === '/env') {

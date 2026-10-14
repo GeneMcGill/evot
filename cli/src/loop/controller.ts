@@ -1,0 +1,157 @@
+import type { LoopMode } from './parser.js'
+
+export const MIN_DELAY_SECONDS = 60
+export const MAX_DELAY_SECONDS = 3600
+export const CACHE_WINDOW_SECONDS = 300
+export const CACHE_LEAD_SECONDS = 30
+export const KEEPALIVE_SECONDS = 1200
+export const MAX_KEEPALIVES = 1
+export const MAX_AGE_MS = 72 * 3_600_000
+export const MAX_CONSECUTIVE_ERRORS = 3
+
+export interface LoopSnapshot {
+  active: boolean
+  mode: LoopMode
+  prompt: string
+  startedAt: number
+  nextFireAt: number | null
+  reason: string | null
+  tick: number
+  noopStreak: number
+}
+
+export interface ScheduleInput {
+  delaySeconds: number
+  reason: string
+  noop: boolean
+}
+
+export type StopCause =
+  | 'user'
+  | 'model'
+  | 'max_age'
+  | 'errors'
+  | 'no_reschedule'
+  | 'session_switch'
+
+export type RunOutcome = 'ok' | 'error'
+
+export interface LoopEvents {
+  stopped: (cause: StopCause, snapshot: LoopSnapshot) => void
+}
+
+export function clampDelaySeconds(seconds: number): number {
+  const rounded = Math.round(seconds)
+  const bounded = Math.min(MAX_DELAY_SECONDS, Math.max(MIN_DELAY_SECONDS, rounded))
+  const lower = CACHE_WINDOW_SECONDS - CACHE_LEAD_SECONDS
+  const upper = CACHE_WINDOW_SECONDS + CACHE_LEAD_SECONDS
+  return bounded >= lower && bounded <= upper ? lower : bounded
+}
+
+export class LoopController {
+  #state: LoopSnapshot | null = null
+  #keepalivesUsed = 0
+  #rescheduledThisRun = false
+  #consecutiveErrors = 0
+  #events: LoopEvents
+
+  constructor(events: LoopEvents) {
+    this.#events = events
+  }
+
+  get active(): boolean {
+    return this.#state?.active === true
+  }
+
+  get snapshot(): LoopSnapshot | null {
+    return this.#state ? { ...this.#state } : null
+  }
+
+  get isDynamic(): boolean {
+    return this.#state?.mode.kind === 'dynamic'
+  }
+
+  start(mode: LoopMode, prompt: string, now = Date.now()): void {
+    this.#state = {
+      active: true,
+      mode,
+      prompt,
+      startedAt: now,
+      nextFireAt: null,
+      reason: null,
+      tick: 0,
+      noopStreak: 0,
+    }
+    this.#keepalivesUsed = 0
+    this.#rescheduledThisRun = false
+    this.#consecutiveErrors = 0
+  }
+
+  stop(cause: StopCause): LoopSnapshot | null {
+    const state = this.#state
+    if (!state?.active) return null
+    const snapshot = { ...state, active: false, nextFireAt: null }
+    this.#state = null
+    this.#events.stopped(cause, snapshot)
+    return snapshot
+  }
+
+  beginRun(now = Date.now()): void {
+    const state = this.#state
+    if (!state?.active) return
+    state.tick += 1
+    state.nextFireAt = null
+    this.#rescheduledThisRun = false
+    if (now - state.startedAt > MAX_AGE_MS) this.stop('max_age')
+  }
+
+  schedule(input: ScheduleInput, now = Date.now()): number {
+    const state = this.#state
+    if (!state?.active) return 0
+    const delay = clampDelaySeconds(input.delaySeconds)
+    state.nextFireAt = now + delay * 1000
+    state.reason = input.reason
+    state.noopStreak = input.noop ? state.noopStreak + 1 : 0
+    this.#rescheduledThisRun = true
+    return delay
+  }
+
+  endRun(outcome: RunOutcome, now = Date.now()): void {
+    const state = this.#state
+    if (!state?.active) return
+
+    if (outcome === 'error') {
+      this.#consecutiveErrors += 1
+      if (this.#consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+        this.stop('errors')
+        return
+      }
+    } else {
+      this.#consecutiveErrors = 0
+    }
+
+    if (state.mode.kind === 'fixed') {
+      state.nextFireAt = now + state.mode.intervalMs
+      return
+    }
+    if (this.#rescheduledThisRun) return
+    if (this.#keepalivesUsed >= MAX_KEEPALIVES) {
+      this.stop('no_reschedule')
+      return
+    }
+    this.#keepalivesUsed += 1
+    state.nextFireAt = now + KEEPALIVE_SECONDS * 1000
+    state.reason = 'keepalive: no wakeup was scheduled'
+  }
+
+  due(now = Date.now()): boolean {
+    const state = this.#state
+    return state?.active === true && state.nextFireAt !== null && now >= state.nextFireAt
+  }
+
+  remainingMs(now = Date.now()): number | null {
+    const state = this.#state
+    if (!state?.active || state.nextFireAt === null) return null
+    return Math.max(0, state.nextFireAt - now)
+  }
+}

@@ -854,3 +854,71 @@ async fn no_limits_runs_without_stop_message() {
     });
     assert!(!stopped, "no limits means no stop message");
 }
+
+// ---------------------------------------------------------------------------
+// Run-settling tools (`ends_turn`)
+// ---------------------------------------------------------------------------
+
+fn call(name: &str) -> MockToolCall {
+    MockToolCall {
+        name: name.into(),
+        arguments: serde_json::json!({}),
+    }
+}
+
+/// A successful `ends_turn` tool call settles the run: the result is recorded
+/// and the provider is not asked for a follow-up response.
+#[tokio::test]
+async fn ends_turn_tool_settles_run_without_follow_up_call() {
+    let output = TestHarness::new()
+        .responses(vec![
+            MockResponse::ToolCalls(vec![call("schedule_wakeup")]),
+            MockResponse::Text("must never be requested".into()),
+        ])
+        .tool(MockTool::ok("schedule_wakeup", "Next wakeup in 30m.").ends_turn())
+        .run("watch the PR")
+        .await;
+
+    output.assert_completed();
+    output.assert_no_errors();
+    assert_eq!(output.event_count("LlmCallStart"), 1);
+    assert_eq!(output.event_count("ToolExecEnd"), 1);
+    assert_eq!(output.last_role(), Some("toolResult"));
+}
+
+/// A failed call to an `ends_turn` tool must come back to the model so it can
+/// repair its arguments.
+#[tokio::test]
+async fn failed_ends_turn_tool_returns_to_model() {
+    let output = TestHarness::new()
+        .responses(vec![
+            MockResponse::ToolCalls(vec![call("schedule_wakeup")]),
+            MockResponse::Text("retrying with a reason".into()),
+        ])
+        .tool(MockTool::err("schedule_wakeup", "reason is required.").ends_turn())
+        .run("watch the PR")
+        .await;
+
+    output.assert_completed();
+    assert_eq!(output.event_count("LlmCallStart"), 2);
+    output.assert_last_role("assistant");
+}
+
+/// Mixing an `ends_turn` tool with ordinary tools in one batch does not
+/// settle: the ordinary results still need the model.
+#[tokio::test]
+async fn ends_turn_mixed_with_regular_tool_does_not_settle() {
+    let output = TestHarness::new()
+        .responses(vec![
+            MockResponse::ToolCalls(vec![call("bash"), call("schedule_wakeup")]),
+            MockResponse::Text("read the bash output".into()),
+        ])
+        .tool(MockTool::ok("bash", "ok"))
+        .tool(MockTool::ok("schedule_wakeup", "Next wakeup in 30m.").ends_turn())
+        .run("watch the PR")
+        .await;
+
+    output.assert_completed();
+    assert_eq!(output.event_count("LlmCallStart"), 2);
+    output.assert_last_role("assistant");
+}

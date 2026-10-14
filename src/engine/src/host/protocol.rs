@@ -31,6 +31,9 @@ pub struct HostToolSpec {
     /// Model-specific name aliases: `(model_pattern, llm_name)`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub name_aliases: Vec<(String, String)>,
+    /// A successful call ends the run without a follow-up model response.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ends_turn: bool,
 }
 
 /// A single invocation of a host tool, forwarded from the engine.

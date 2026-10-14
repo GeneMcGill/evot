@@ -11,7 +11,7 @@
 import { providerFailurePresentation } from '../provider/error-presentation.js'
 import { renderMarkdown, renderThinkingMarkdown } from './markdown.js'
 import { colorizeUnifiedDiffRows, type DiffRowKind } from './diff.js'
-import { truncate, formatDuration, formatElapsed, toolResultLines, formatBashCommandDisplay, EXPAND_HINT, COLLAPSE_HINT, summarizeInline } from './format.js'
+import { truncate, formatDuration, formatElapsed, formatWallClock, toolResultLines, formatBashCommandDisplay, EXPAND_HINT, COLLAPSE_HINT, summarizeInline } from './format.js'
 import { formatCompactionCompleted } from './verbose.js'
 import type { UICompaction, UIMessage, UIToolCall } from '../term/app/types.js'
 
@@ -502,6 +502,7 @@ export function buildToolCard(call: UIToolCall, expanded?: boolean, _now = Date.
   // cancellation) separately. Rendering its engine-side lifecycle as a generic
   // tool card duplicates that UI with an unhelpful `ready/running` card.
   if (isAskUserTool(call.name)) return []
+  if (isScheduleWakeupTool(call.name)) return buildLoopCard(call, _now)
 
   const details = asDetails(call.details)
   const diff = typeof details.diff === 'string' ? details.diff : undefined
@@ -1095,6 +1096,42 @@ export class AssistantStreamBuffer {
 function isAskUserTool(name: string): boolean {
   const normalized = name.toLowerCase().replace(/_/g, '')
   return normalized === 'askuser'
+}
+
+function isScheduleWakeupTool(name: string): boolean {
+  return name.toLowerCase().replace(/_/g, '') === 'schedulewakeup'
+}
+
+function buildLoopCard(call: UIToolCall, now: number): OutputLine[] {
+  const args = call.args
+  const reason = typeof args.reason === 'string' ? args.reason.trim() : ''
+  const stop = args.stop === true
+  const quiet = args.noop === true
+  const line = (text: string): OutputLine => ({ id: genId('loop'), kind: 'tool', text })
+
+  if (call.status === 'queued' || call.status === 'running') {
+    return stampToolCard([line(stop ? '⏹ loop · stopping…' : '⟳ loop · scheduling next wakeup…')], 'pending')
+  }
+  if (call.status === 'error') {
+    const lines = [line('✗ loop · wakeup not scheduled')]
+    const detail = typeof call.result === 'string' ? call.result.trim() : ''
+    if (detail) lines.push(line(`  ${detail}`))
+    return stampToolCard(lines, 'error')
+  }
+
+  const head = stop
+    ? '⏹ loop · stopping'
+    : `⟳ loop${quiet ? ' · quiet' : ''} · ${loopNextWakeup(args, call.startedAt ?? now)}`
+  const lines = [line(head)]
+  if (reason) lines.push(line(`  ${reason}`))
+  return stampToolCard(lines, 'success')
+}
+
+function loopNextWakeup(args: Record<string, unknown>, from: number): string {
+  const requested = typeof args.delay_seconds === 'number' ? args.delay_seconds : NaN
+  if (!Number.isFinite(requested)) return 'next wakeup scheduled'
+  const seconds = Math.min(3600, Math.max(60, Math.round(requested)))
+  return `next wakeup in ${formatElapsed(seconds * 1000)} (${formatWallClock(from + seconds * 1000)})`
 }
 
 function humanBytes(n: number): string {

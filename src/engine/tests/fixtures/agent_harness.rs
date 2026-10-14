@@ -40,6 +40,7 @@ pub struct MockTool {
     result: Result<ToolResult, ToolError>,
     /// Artificial execution delay, to simulate a long-running command.
     delay: Option<std::time::Duration>,
+    ends_turn: bool,
 }
 
 impl MockTool {
@@ -58,6 +59,7 @@ impl MockTool {
                 retention: Retention::Normal,
             }),
             delay: None,
+            ends_turn: false,
         }
     }
 
@@ -70,7 +72,15 @@ impl MockTool {
             schema: serde_json::json!({"type": "object", "properties": {}}),
             result: Err(ToolError::Failed(error.into())),
             delay: None,
+            ends_turn: false,
         }
+    }
+
+    /// Mark the tool as run-settling: a successful call ends the run without
+    /// a follow-up model response.
+    pub fn ends_turn(mut self) -> Self {
+        self.ends_turn = true;
+        self
     }
 
     /// Add an artificial execution delay, to simulate a long-running command
@@ -101,6 +111,9 @@ impl AgentTool for MockTool {
     }
     fn parameters_schema(&self) -> serde_json::Value {
         self.schema.clone()
+    }
+    fn ends_turn(&self) -> bool {
+        self.ends_turn
     }
     async fn execute(
         &self,
