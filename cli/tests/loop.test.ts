@@ -351,3 +351,31 @@ describe('LoopSession stop notice ordering', () => {
     expect(notices.at(-1)).toContain('⏹ loop stopped by you')
   })
 })
+
+describe('LoopSession waiting state', () => {
+  test('reports working while a wakeup is pending and idle once stopped', async () => {
+    const { LoopSession } = await import('../src/loop/session.js')
+    const transitions: boolean[] = []
+    const ticks: number[] = []
+    let extension: HostToolExtension | undefined
+    const session = new LoopSession({
+      runTurn: (_line, _prompt, ext) => { extension = ext },
+      canWake: () => true,
+      notify: () => {},
+      requestRender: () => {},
+      waitTick: ms => ticks.push(ms),
+      waitingChanged: w => transitions.push(w),
+    })
+    session.handleCommand('/loop watch', 'watch')
+    expect(session.waiting).toBe(false)
+    if (!extension) throw new Error('no extension')
+    await extension.dispatch({ tool_call_id: '1', tool_name: 'schedule_wakeup', arguments: { delay_seconds: 600, reason: 'r' } })
+    expect(transitions).toEqual([])
+    session.endRun('ok')
+    expect(session.waiting).toBe(true)
+    expect(transitions).toEqual([true])
+    session.handleCommand('/loop stop', 'stop')
+    expect(transitions).toEqual([true, false])
+    session.dispose()
+  })
+})

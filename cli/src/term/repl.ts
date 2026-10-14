@@ -170,6 +170,7 @@ import type { OverlayState } from './app/overlay-state.js'
 import { ResourceScope } from './resource-scope.js'
 import { RenderWakeup } from './render-wakeup.js'
 import { errorText } from '../render/format.js'
+import { formatDuration as formatLoopDelay } from '../loop/parser.js'
 import { buildRunFooterLine } from '../render/run-footer.js'
 import { RunThinking } from '../render/run-thinking.js'
 import { TaskSession } from '../task/session.js'
@@ -311,9 +312,14 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
   // flag, so the glyph would linger on the tab until the next title write.
   // An in-flight run repaints its own frames; otherwise restore the idle
   // marker the same way overlays like /sessions leave it.
+  const idleWaitTitle = (): string => {
+    if (backgroundWaitSince !== null) return '◌ bg'
+    if (loopSession.waiting) return '◌ loop'
+    return '✳'
+  }
   const unfreezeTerminalTitle = () => {
     terminalTitle.unfreeze()
-    if (!isLoading) setTerminalTitle(backgroundWaitSince !== null ? '◌ bg' : '✳')
+    if (!isLoading) setTerminalTitle(idleWaitTitle())
   }
   let shareSelector: ShareSelector | null = null
   const loopSession = new LoopSession({
@@ -326,6 +332,15 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
       && overlay.kind !== 'ask-user',
     notify: text => commitSystem('sys-loop', `  ${text}`),
     requestRender: () => renderer.requestRender(),
+    waitTick: remainingMs => {
+      if (isLoading || backgroundWaitSince !== null) return
+      setTerminalTitle(`${['⠂', '⠐'][titleFrame++ % 2]} loop ${formatLoopDelay(remainingMs)}`)
+    },
+    waitingChanged: waiting => {
+      if (isLoading) return
+      sessionHook.state(waiting ? 'working' : 'idle')
+      setTerminalTitle(idleWaitTitle())
+    },
   })
   resources.add(() => loopSession.dispose())
 
@@ -2036,7 +2051,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
     // Always replace the final animated glyph. An ask overlay can keep the
     // title frozen while the run settles; normal title writes are correctly
     // blocked then, but the completed state must not remain stuck on ·/⠂/⠐.
-    setTerminalTitle(backgroundWaitSince !== null ? '◌ bg' : '✳', true)
+    setTerminalTitle(idleWaitTitle(), true)
   }
 
   /** Load the fork ancestry for the footer breadcrumb. Never fatal: a failed
@@ -2308,7 +2323,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
       renderer.requestRender()
     } else if (!waiting && backgroundWaitSince !== null) {
       backgroundWaitSince = null
-      if (!isLoading) setTerminalTitle('✳')
+      if (!isLoading) setTerminalTitle(idleWaitTitle())
       renderer.requestRender()
     }
   }

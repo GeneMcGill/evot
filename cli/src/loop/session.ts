@@ -10,6 +10,8 @@ export interface LoopSessionDeps {
   canWake: () => boolean
   notify: (text: string) => void
   requestRender: () => void
+  waitTick?: (remainingMs: number) => void
+  waitingChanged?: (waiting: boolean) => void
 }
 
 const TICK_MS = 1000
@@ -31,6 +33,7 @@ export class LoopSession {
   #timer: ReturnType<typeof setInterval> | null = null
   #runBegun = false
   #pendingStopNotice: string | null = null
+  #waitingReported = false
 
   constructor(deps: LoopSessionDeps) {
     this.#deps = deps
@@ -46,6 +49,10 @@ export class LoopSession {
 
   get snapshot(): LoopSnapshot | null {
     return this.#controller.snapshot
+  }
+
+  get waiting(): boolean {
+    return this.#controller.remainingMs() !== null
   }
 
   get extension(): HostToolExtension | undefined {
@@ -84,6 +91,7 @@ export class LoopSession {
     this.#runBegun = false
     this.#controller.endRun(outcome)
     this.#flushStopNotice()
+    this.#syncWaiting()
     this.#deps.requestRender()
   }
 
@@ -132,6 +140,8 @@ export class LoopSession {
       return
     }
     this.#deps.requestRender()
+    const remaining = this.#controller.remainingMs()
+    if (remaining !== null && !this.#runBegun) this.#deps.waitTick?.(remaining)
     if (!this.#controller.due() || !this.#deps.canWake()) return
     this.#startRun()
     const snapshot = this.#controller.snapshot
@@ -145,6 +155,14 @@ export class LoopSession {
   #startRun(): void {
     this.#runBegun = true
     this.#controller.beginRun()
+    this.#syncWaiting()
+  }
+
+  #syncWaiting(): void {
+    const waiting = !this.#runBegun && this.waiting
+    if (waiting === this.#waitingReported) return
+    this.#waitingReported = waiting
+    this.#deps.waitingChanged?.(waiting)
   }
 
   #onStopped(cause: StopCause, snapshot: LoopSnapshot): void {
@@ -157,6 +175,7 @@ export class LoopSession {
       return
     }
     this.#deps.notify(notice)
+    this.#syncWaiting()
     this.#deps.requestRender()
   }
 
