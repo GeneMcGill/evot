@@ -655,6 +655,9 @@ fn build_title(items: &[TranscriptItem]) -> Option<String> {
                 if crate::compact::context_view::is_compact_summary_text(text) {
                     return None;
                 }
+                // A host-expanded command titles the session by what the
+                // user typed, not by the attached instructions.
+                let text = crate::command::user_facing_text(text)?;
                 let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
                 if !normalized.is_empty() {
                     return Some(normalized);

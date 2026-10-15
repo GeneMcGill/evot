@@ -161,3 +161,69 @@ fn parse_non_command_returns_none() {
     assert!(parse_command("/history 10").is_none());
     assert!(parse_command("clear").is_none());
 }
+
+#[test]
+fn command_prompt_round_trips_user_input_and_hides_instructions() {
+    use evot::command::command_prompt;
+    use evot::command::parse_command_prompt;
+    use evot::command::user_facing_text;
+
+    let prompt = command_prompt(
+        "sessions",
+        "/sessions \"auth\" <bug> & more\nline2",
+        "Follow the skill.",
+    );
+    assert!(prompt.starts_with(
+        "<command name=\"sessions\" input=\"/sessions &quot;auth&quot; &lt;bug&gt; &amp; more&#10;line2\">\n"
+    ));
+    assert!(prompt.ends_with("\nFollow the skill.\n</command>"));
+
+    let Some(parsed) = parse_command_prompt(&prompt) else {
+        panic!("envelope parses");
+    };
+    assert_eq!(parsed.name, "sessions");
+    assert_eq!(parsed.input, "/sessions \"auth\" <bug> & more\nline2");
+    assert_eq!(parsed.instructions, "Follow the skill.");
+    assert!(parsed.text.is_none());
+
+    assert_eq!(
+        user_facing_text(&prompt).as_deref(),
+        Some("/sessions \"auth\" <bug> & more\nline2")
+    );
+    assert_eq!(
+        user_facing_text("plain text").as_deref(),
+        Some("plain text")
+    );
+    assert!(
+        user_facing_text(&command_prompt("loop-wakeup", "loop wakeup #2", "Continue")).is_none()
+    );
+
+    // A background-task completion is a host notice, not something the user said.
+    let notification =
+        "<task-notification>\n<task-id>31c7af32-57aa-4b47-b503-9e05d35a42d5</task-id>\n\
+        <status>completed</status>\n<exit-code>0</exit-code>\n<summary>done</summary>\n\
+        <output-file>/tmp/o.txt</output-file>\n</task-notification>";
+    assert!(user_facing_text(notification).is_none());
+    let quoted = format!("the format is\n{notification}");
+    assert_eq!(user_facing_text(&quoted).as_deref(), Some(quoted.as_str()));
+}
+
+#[test]
+fn command_prompt_parser_ignores_mentions_and_bad_names() {
+    use evot::command::parse_command_prompt;
+    assert!(parse_command_prompt("explain <command name=\"x\" input=\"y\">").is_none());
+    assert!(parse_command_prompt("<command name=\"Loop\" input=\"y\">\nz\n</command>").is_none());
+    assert!(
+        parse_command_prompt("hi\n<command name=\"loop\" input=\"y\">\nz\n</command>").is_none()
+    );
+    assert!(parse_command_prompt(
+        "<command name=\"loop\" input=\"y\">\nz\n</command>\nno blank line"
+    )
+    .is_none());
+    let tail =
+        parse_command_prompt("<command name=\"task\" input=\"\">\nz\n</command>\n\nmake it daily");
+    assert_eq!(
+        tail.map(|envelope| envelope.text),
+        Some(Some("make it daily"))
+    );
+}

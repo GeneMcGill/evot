@@ -2324,3 +2324,44 @@ async fn llm_request_payload_is_delta_persisted() -> TestResult {
     ]);
     Ok(())
 }
+
+#[tokio::test]
+async fn session_title_uses_typed_line_of_expanded_command() -> TestResult {
+    let dir = TempDir::new()?;
+    let storage = open_storage(&StorageConfig::fs(dir.path().to_path_buf()))?;
+    let session = Session::new(
+        "sess-command-title".into(),
+        "/tmp".into(),
+        "claude-sonnet".into(),
+        storage.clone(),
+    )
+    .await?;
+    session
+        .write_items(vec![
+            TranscriptItem::User {
+                text: evot::command::command_prompt(
+                    "loop",
+                    "/loop 5m watch the CI run",
+                    "You are running a recurring loop.\n\nRules:\n- never busy-poll",
+                ),
+                content: vec![],
+            },
+            TranscriptItem::User {
+                text: evot::command::command_prompt("loop-wakeup", "loop wakeup #1", "Continue"),
+                content: vec![],
+            },
+        ])
+        .await?;
+    session.save().await?;
+
+    let loaded = Session::open("sess-command-title", storage.clone())
+        .await?
+        .ok_or_else(|| missing_error("missing titled session"))?;
+    let title = loaded
+        .meta()
+        .await
+        .title
+        .ok_or_else(|| missing_error("missing session title"))?;
+    assert_eq!(title, "/loop 5m watch the CI run");
+    Ok(())
+}

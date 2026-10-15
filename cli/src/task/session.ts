@@ -21,6 +21,7 @@ import { ADJUST_WITH_AGENT, importArguments, importAsRequest, importExtraFields,
 import type { TaskModelDefaults, TaskModelPickerRequest, TaskModelSelection } from './model-picker.js'
 import { createTaskFlowState, createTaskPrompt, updateTaskPrompt, type TaskPromptContext } from './prompt.js'
 import { createTaskWindow } from './window.js'
+import { buildCommandPrompt } from '../session/command-envelope.js'
 import { createTaskRunsWindow, createTaskTranscriptWindow } from './history.js'
 import type { ScheduledTask, TaskListResponse, TaskRunSummary } from './types.js'
 
@@ -198,7 +199,9 @@ export class TaskSession {
   #startFlow(flow: ReturnType<typeof createTaskFlowState>, userLine: string, prompt: string): void {
     const extension = this.#extension(flow)
     this.#activeFlow = { flow, extension, sessionId: this.#host.currentSessionId() }
-    this.#host.runTaskTurn(userLine, prompt, extension)
+    // The transcript keeps the user's line visible and folds the flow
+    // instructions, like a skill block; the model still reads both.
+    this.#host.runTaskTurn(userLine, buildCommandPrompt({ name: 'task', input: userLine, instructions: prompt }), extension)
   }
 
   /** Bind a newly created session to the task flow; never carry an unfinished

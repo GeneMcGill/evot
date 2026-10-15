@@ -159,6 +159,7 @@ import { getSkillEntries, OFFICIAL_SYNC_INTERVAL_MS, startOfficialSkillMaintenan
 import { isCommandWindowBridge, isCommandWindowTypingEvent, resolveCommandWindowTrigger } from './app/command-window-trigger.js'
 import { createSkillSelectorState } from './app/skill-window.js'
 import { transcriptToMessages } from '../session/transcript.js'
+import { buildCommandPrompt } from '../session/command-envelope.js'
 import { GitInfoProvider } from './git-info.js'
 import { isHostToolEvent } from '../native/contracts/query-event.js'
 import { lastAssistantText, parseSessionSearchResults } from './app/session-search.js'
@@ -3436,9 +3437,8 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
     } else if (name === '/env') {
       await handleEnvCommand(replCommands, args)
     } else if (name === '/harden') {
-      const subject = buildHardenPrompt(args)
       commitLines(buildUserMessage(text.trim()))
-      runQuery(subject)
+      runQuery(buildCommandPrompt({ name: 'harden', input: text.trim(), instructions: buildHardenPrompt(args) }))
     } else if (name === '/clip') {
       const sub = args.trim().toLowerCase()
       if (sub === 'all') {

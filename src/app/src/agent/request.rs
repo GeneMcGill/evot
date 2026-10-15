@@ -114,16 +114,18 @@ pub(super) async fn expand_prompt_command(
     ctx: &PromptCommandContext<'_>,
 ) -> Result<QueryRequest> {
     use crate::command::clip_session_prompt;
+    use crate::command::command_prompt;
     use crate::command::parse_command;
     use crate::command::Command;
 
-    let text = match parse_command(&request.input_text()) {
+    let input_text = request.input_text();
+    let text = match parse_command(&input_text) {
         Some(Command::ClipSession) => {
             let memory = crate::agent::prompt::skill::load_skill(ctx.skills_dirs, "memory")
                 .map_err(|error| EvotError::Agent(format!("cannot load memory skill: {error}")))?;
             let instructions = crate::agent::prompt::skill::load_skill_instructions(&memory)
                 .map_err(|error| EvotError::Agent(format!("cannot read memory skill: {error}")))?;
-            clip_session_prompt(&instructions)
+            command_prompt("clip", &input_text, &clip_session_prompt(&instructions))
         }
         Some(Command::SessionSearch(search)) => {
             let skill = crate::agent::prompt::skill::load_skill(ctx.skills_dirs, "session-search")
@@ -154,7 +156,11 @@ pub(super) async fn expand_prompt_command(
                 budget,
             )
             .await?;
-            candidates.prompt(&search.query, &instructions)?
+            command_prompt(
+                "sessions",
+                &input_text,
+                &candidates.prompt(&search.query, &instructions)?,
+            )
         }
         _ => return Ok(request),
     };

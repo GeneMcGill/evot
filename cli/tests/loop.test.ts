@@ -244,7 +244,9 @@ describe('prompts', () => {
     expect(text).toContain('#7')
     expect(text).toContain('…')
     expect(text).toContain('schedule_wakeup')
-    expect(text.length).toBeLessThan(220)
+    // One envelope header plus one instruction line: still a reminder, not a prompt.
+    expect(text.split('\n')).toHaveLength(3)
+    expect(text.length).toBeLessThan(300)
   })
 })
 

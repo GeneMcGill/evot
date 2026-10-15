@@ -138,12 +138,12 @@ impl SessionDigest {
     }
 }
 
-fn real_user_text(item: &TranscriptItem) -> Option<&str> {
+fn real_user_text(item: &TranscriptItem) -> Option<std::borrow::Cow<'_, str>> {
     match item {
         TranscriptItem::User { text, .. }
             if !text.trim().is_empty() && !is_compact_summary_text(text) =>
         {
-            Some(text)
+            crate::command::user_facing_text(text)
         }
         _ => None,
     }
@@ -153,7 +153,7 @@ fn message_excerpt(item: &TranscriptItem) -> Option<MessageExcerpt> {
     if let Some(text) = real_user_text(item) {
         return Some(MessageExcerpt {
             role: "user",
-            text: excerpt(text, 300),
+            text: excerpt(&text, 300),
         });
     }
     let TranscriptItem::Assistant { content, .. } = item else {

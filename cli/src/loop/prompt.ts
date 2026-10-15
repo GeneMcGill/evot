@@ -2,6 +2,7 @@ import type { LoopMode } from './parser.js'
 import { formatDuration } from './parser.js'
 import type { LoopSnapshot } from './controller.js'
 import { MIN_DELAY_SECONDS, MAX_DELAY_SECONDS } from './controller.js'
+import { buildCommandPrompt } from '../session/command-envelope.js'
 
 const SHARED_RULES = [
   'Prefer event-driven waiting over polling: when something external must happen (CI, a review, a deploy), start one background shell command that blocks until the condition changes and exits, so its completion wakes you immediately.',
@@ -10,7 +11,10 @@ const SHARED_RULES = [
   'Keep a running cursor (last review id, last commit, last timestamp) in your reply so later wakeups can compare against it.',
 ]
 
-export function buildLoopStartPrompt(mode: LoopMode, prompt: string): string {
+/** The first loop turn. `input` is what the user typed (`/loop 5m …`); the
+ *  rules live inside the command envelope so replays and shares show the
+ *  user's line and fold the host's instructions. */
+export function buildLoopStartPrompt(mode: LoopMode, prompt: string, input = `/loop ${prompt}`): string {
   const header = mode.kind === 'fixed'
     ? `You are running a recurring loop. The host will wake you every ${formatDuration(mode.intervalMs)} with a short reminder; you do not schedule anything yourself.`
     : 'You are running a self-paced loop. Every turn: do the work, write a short status line (with your cursor), then call `schedule_wakeup` exactly once as the final action; the turn ends when it returns. Call it with `stop: true` when the goal is reached or cannot progress.'
@@ -23,7 +27,7 @@ export function buildLoopStartPrompt(mode: LoopMode, prompt: string): string {
       ]
     : []
 
-  return [
+  const instructions = [
     header,
     '',
     'Task:',
@@ -34,6 +38,8 @@ export function buildLoopStartPrompt(mode: LoopMode, prompt: string): string {
     '',
     'Start now: perform the first pass of the task.',
   ].join('\n')
+
+  return buildCommandPrompt({ name: 'loop', input, instructions })
 }
 
 export function buildLoopWakeupPrompt(snapshot: LoopSnapshot, now = Date.now()): string {
@@ -42,5 +48,9 @@ export function buildLoopWakeupPrompt(snapshot: LoopSnapshot, now = Date.now()):
   const tail = snapshot.mode.kind === 'dynamic'
     ? ' End with schedule_wakeup.'
     : ''
-  return `/loop wakeup #${snapshot.tick} (${time}). Continue: ${excerpt}${tail}`
+  return buildCommandPrompt({
+    name: 'loop-wakeup',
+    input: `loop wakeup #${snapshot.tick} (${time})`,
+    instructions: `/loop wakeup #${snapshot.tick} (${time}). Continue: ${excerpt}${tail}`,
+  })
 }

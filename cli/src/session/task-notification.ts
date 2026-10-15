@@ -2,11 +2,20 @@
  * Recognize only the complete runtime envelope, not arbitrary XML mentions.
  * This projection is display-only; stored content and model input are untouched.
  */
-export type ReplayTextPart = { kind: 'user' | 'task-notification'; text: string }
+import { commandDisplay, parseCommandPrompt } from './command-envelope.js'
+
+export type ReplayTextPart = { kind: 'user' | 'task-notification' | 'command-notice'; text: string }
 
 const envelope = /^<task-notification>\r?\n<task-id>([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})<\/task-id>\r?\n<status>(completed|failed|killed|timed_out)<\/status>\r?\n(?:<exit-code>(-?\d+)<\/exit-code>\r?\n)?(?:<output-truncated>true<\/output-truncated>\r?\n)?<summary>[^\r\n]*<\/summary>\r?\n<output-file>[^\r\n]+<\/output-file>\r?\n<\/task-notification>(?=\r?$)/gm
 
 export function replayUserText(text: string): ReplayTextPart[] {
+  // A host-expanded command: show the user's line (or a wakeup notice), never
+  // the instructions the host attached for the model.
+  const command = parseCommandPrompt(text)
+  if (command) {
+    const display = commandDisplay(command)
+    return [{ kind: display.kind === 'user' ? 'user' : 'command-notice', text: display.text }]
+  }
   const parts: ReplayTextPart[] = []
   let cursor = 0
   for (const match of text.matchAll(envelope)) {

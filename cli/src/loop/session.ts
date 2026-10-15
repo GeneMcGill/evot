@@ -78,7 +78,7 @@ export class LoopSession {
         this.#controller.start(command.mode, command.task)
         this.#ensureTimer()
         this.#startRun()
-        this.#deps.runTurn(rawInput, buildLoopStartPrompt(command.mode, command.task.prompt), this.#extension)
+        this.#deps.runTurn(rawInput, buildLoopStartPrompt(command.mode, command.task.prompt, rawInput), this.#extension)
         return
       }
     }
