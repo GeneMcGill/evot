@@ -28,6 +28,7 @@ export type ReplControlAction =
   | { kind: 'reclaim-turn' }
   | { kind: 'interrupt' }
   | { kind: 'stop-background' }
+  | { kind: 'stop-loop' }
   | { kind: 'exit' }
   | { kind: 'show-exit-hint' }
   | { kind: 'clear-editor' }
@@ -82,6 +83,9 @@ export function decideReplControl(input: ReplControlInput): ReplControlAction[] 
     // short window. Backgrounding lives on ctrl+b, so neither key's meaning
     // depends on state the user cannot see.
     if (interaction.interruptTarget === 'background') return actions.concat({ kind: 'stop-background' })
+    // A parked loop is interruptible like a run: two presses, same window, so
+    // one stray Esc (a vim reflex, an escape sequence) cannot end it.
+    if (interaction.interruptTarget === 'loop') return actions.concat({ kind: 'stop-loop' })
     if (interaction.interruptTarget) return actions.concat({ kind: 'interrupt' })
     if (interaction.backgroundStopping) return actions
     if (!isEditorEmpty(editor)) return actions.concat({ kind: 'clear-editor' })

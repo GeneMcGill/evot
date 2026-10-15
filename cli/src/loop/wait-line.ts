@@ -8,6 +8,8 @@ export const LOOP_WAKE_SOON_MS = 60_000
 export interface LoopWaitLineInput {
   /** Milliseconds until the scheduled wakeup. */
   remainingMs: number
+  /** A first Esc has armed the stop; the row asks for the confirming press. */
+  stopPending?: boolean
 }
 
 /**
@@ -20,5 +22,8 @@ export interface LoopWaitLineInput {
 export function formatLoopWaitLine(input: LoopWaitLineInput): string {
   const soon = input.remainingMs <= LOOP_WAKE_SOON_MS
   const tone = soon ? chalk.yellow : chalk.hex(getTheme().brandHex)
-  return tone(`◌ loop · wakes in ${formatDuration(input.remainingMs)}`)
+  const line = tone(`◌ loop · wakes in ${formatDuration(input.remainingMs)}`)
+  // The confirmation prompt is the one moment the row talks about keys: the
+  // placeholder said "esc twice", the first press happened, say what is next.
+  return input.stopPending ? `${line}${chalk.yellow(' · esc again to stop the loop')}` : line
 }

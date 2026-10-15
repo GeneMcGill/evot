@@ -560,9 +560,9 @@ describe('prompt frame', () => {
     // A queue with nothing running is stale state, not a prompt to manage it.
     expect(hint({ busy: false, queuedCount: 2 })).toBe('❭ Enter a coding task or / for commands')
     // A parked loop is still steerable; say how. A running turn wins over it.
-    expect(hint({ loopParked: true })).toBe('❭ Loop waiting · type to act now · /loop 15m to change pace · esc to stop')
+    expect(hint({ loopParked: true })).toBe('❭ Loop waiting · type to act now · /loop 15m to change pace · esc twice to stop')
     expect(hint({ loopParked: true, busy: true })).toBe('❭ Guide the agent while it works')
-    expect(hint({ columns: 50, loopParked: true })).toBe('❭ Loop waiting · type · /loop 15m · esc')
+    expect(hint({ columns: 50, loopParked: true })).toBe('❭ Loop waiting · type · /loop 15m · esc twice')
     // Narrow terminals get the short forms.
     expect(hint({ columns: 40, busy: true })).toBe('❭ Guide while it works')
     expect(hint({ columns: 40, busy: true, queuedCount: 1 })).toBe('❭ 1 queued · Ctrl+G')

@@ -17,6 +17,8 @@ export function runStatusPresentation(state: RunInteractionState): {
     hint = state.interruptPending
       ? `esc again to stop all ${state.backgroundTasks ?? 0} background tasks`
       : 'esc twice to stop all background tasks'
+  } else if (state.interruptTarget === 'loop') {
+    hint = state.interruptPending ? 'esc again to stop the loop' : 'esc twice to stop the loop'
   } else if (state.interruptTarget && state.interruptPending) {
     hint = `esc again to interrupt${target}`
   } else if (state.backgroundAction) {
@@ -28,6 +30,7 @@ export function runStatusPresentation(state: RunInteractionState): {
     label: state.kind === 'waiting-task' ? 'Waiting for task result…'
       : state.kind === 'waiting-background'
         ? state.backgroundStopping ? 'Stopping background tasks…' : 'Background task running · resumes when finished'
+      : state.kind === 'waiting-loop' ? 'Loop waiting for the next wakeup'
         : undefined,
     hint: hint ? ` · ${hint}` : '',
     confirmationPending: Boolean(state.interruptTarget && state.interruptPending),

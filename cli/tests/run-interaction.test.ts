@@ -116,3 +116,48 @@ test('overlay and queued-message precedence is preserved', () => {
   expect(decideReplControl(input)).toEqual([{ kind: 'restore-queued' }])
   expect(decideReplControl({ ...input, overlay: { kind: 'help' } })).toEqual([{ kind: 'close-overlay' }])
 })
+
+test('a parked loop takes two Esc presses, scoped to that loop', () => {
+  let now = 0
+  const controller = new RunInteraction(() => now)
+  const parked = { active: false, owner: null, loopParked: true, loopOwner: 1000 }
+  const state = resolveRunInteraction(parked)
+  expect(state.kind).toBe('waiting-loop')
+  expect(state.interruptTarget).toBe('loop')
+  expect(runStatusPresentation(state).hint).toBe(' · esc twice to stop the loop')
+
+  // First press arms, second confirms; the hint tracks the window.
+  expect(controller.requestInterrupt(parked)).toBe('confirm')
+  expect(runStatusPresentation(controller.snapshot(parked)).hint).toBe(' · esc again to stop the loop')
+  expect(controller.requestInterrupt(parked)).toBe('interrupt')
+  expect(controller.snapshot(parked).interruptPending).toBe(false)
+
+  // The window expires like every other interrupt.
+  expect(controller.requestInterrupt(parked)).toBe('confirm')
+  now += 5000
+  expect(controller.requestInterrupt(parked)).toBe('confirm')
+
+  // A restarted loop is a new owner: no inherited confirmation.
+  expect(controller.requestInterrupt({ ...parked, loopOwner: 2000 })).toBe('confirm')
+
+  // A turn the user types while parked moves Esc to that run; coming back
+  // to the parked loop starts over.
+  expect(controller.requestInterrupt({ active: true, owner, loopParked: false, loopOwner: 1000 })).toBe('confirm')
+  expect(controller.requestInterrupt(parked)).toBe('confirm')
+})
+
+test('parked loop Esc routes to stop-loop and outranks background stop, below overlays and completions', () => {
+  const interaction = resolveRunInteraction({ active: false, owner: null, loopParked: true, loopOwner: 1, backgroundTasks: 2 })
+  const input = {
+    interaction, event: { type: 'escape' as const }, overlay: { kind: 'none' as const },
+    editor: { ...createEditorState(), lines: ['keep this draft'] },
+    isLoading: false, hasStream: false, exitHint: false, logMode: false, hasQueuedPrompt: false,
+  }
+  expect(decideReplControl(input)).toEqual([{ kind: 'stop-loop' }])
+  expect(input.editor.lines).toEqual(['keep this draft'])
+  expect(decideReplControl({ ...input, overlay: { kind: 'help' } })).toEqual([{ kind: 'close-overlay' }])
+  const completion = { items: [{ label: '/help', value: '/help ', description: '' }], selectedIndex: 0, replaceStart: 0, replaceEnd: 2 }
+  expect(decideReplControl({ ...input, editor: { ...input.editor, completion } })).toEqual([{ kind: 'close-completion' }])
+  // Ctrl+C keeps its own meaning while parked.
+  expect(decideReplControl({ ...input, event: { type: 'ctrl', key: 'c' } })).toEqual([{ kind: 'clear-editor' }])
+})

@@ -111,7 +111,7 @@ function placeholderHint(input: PromptVMInput, mode: PromptModeStyle, wide: bool
   }
   if (input.busy) return wide ? 'Guide the agent while it works' : 'Guide while it works'
   if (input.loopParked) {
-    return wide ? 'Loop waiting · type to act now · /loop 15m to change pace · esc to stop' : 'Loop waiting · type · /loop 15m · esc'
+    return wide ? 'Loop waiting · type to act now · /loop 15m to change pace · esc twice to stop' : 'Loop waiting · type · /loop 15m · esc twice'
   }
   return wide ? mode.hint : mode.shortHint
 }

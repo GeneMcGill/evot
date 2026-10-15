@@ -472,3 +472,12 @@ describe('formatLoopWaitLine', () => {
     expect(formatLoopWaitLine({ remainingMs: 42_000 })).toContain(chalk.yellow('◌ loop · wakes in 42s'))
   })
 })
+
+describe('formatLoopWaitLine stop confirmation', () => {
+  test('asks for the second Esc only while a stop is pending', () => {
+    expect(stripAnsi(formatLoopWaitLine({ remainingMs: 600_000, stopPending: true })))
+      .toBe('◌ loop · wakes in 10m · esc again to stop the loop')
+    expect(stripAnsi(formatLoopWaitLine({ remainingMs: 600_000, stopPending: false })))
+      .toBe('◌ loop · wakes in 10m')
+  })
+})

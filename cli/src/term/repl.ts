@@ -295,6 +295,10 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
       backgroundTasks: backgroundTerminals.runningCount(),
       backgroundOwner: backgroundTerminals.stopTarget(),
       backgroundStopping: backgroundTerminals.isStopping(),
+      loopParked: !isLoading && loopSession.waiting,
+      // The start timestamp identifies one loop: `/loop` again, or a stop and
+      // restart, must not inherit an armed confirmation from the previous one.
+      loopOwner: loopSession.snapshot?.startedAt ?? null,
     }
   }
   const runOwnership = new RunOwnership()
@@ -1586,7 +1590,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
     const interaction = runInteraction.snapshot(runInteractionInput())
     // While a loop is parked, Esc stops the loop (the placeholder says so),
     // so the chip must not advertise a second meaning for the same key.
-    const loopParked = !isLoading && loopSession.waiting
+    const loopParked = interaction.kind === 'waiting-loop'
     const backgroundStopHint = overlay.kind !== 'none' || editor.completion || loopParked ? undefined
       : interaction.kind === 'waiting-background' && interaction.backgroundStopping ? 'Stopping…'
       : interaction.interruptTarget === 'background'
@@ -1829,7 +1833,10 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
       // is the footer chip's business, not this row's.
       const wait = loopSession.waitRemaining()
       if (wait) {
-        const waitText = formatLoopWaitLine({ remainingMs: wait.remainingMs })
+        const waitText = formatLoopWaitLine({
+          remainingMs: wait.remainingMs,
+          stopPending: runInteraction.snapshot(runInteractionInput()).interruptPending,
+        })
         spinnerBlock = {
           lines: wrapTextWithAnsi(waitText, renderer.termCols).map(text => ({ spans: [{ text }] })),
           marginTop: 1,
@@ -2622,12 +2629,6 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
         return
       }
     }
-    // Parked between loop ticks, with the composer idle: Esc cancels the
-    // pending wakeup, the gesture the `◌ loop … · esc` footer badge advertises.
-    if (event.type === 'escape' && !isLoading && overlay.kind === 'none' && !editor.completion
-      && loopSession.cancelWait()) {
-      return
-    }
     if (isQueueManageShortcut(event)) {
       if (overlay.kind === 'selector' && overlay.state.owner === SELECTOR_OWNER.queue) {
         overlay = { kind: 'none' }
@@ -2699,6 +2700,15 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
         renderer.requestRender()
         return true
       }
+      case 'stop-loop':
+        // Parked between loop ticks: Esc stops the loop, behind the same
+        // two-press window as a running turn. The wait row shows "esc again"
+        // after the first press; the second one is `/loop stop` without typing.
+        if (runInteraction.requestInterrupt(runInteractionInput()) === 'interrupt') {
+          loopSession.cancelWait()
+        }
+        renderer.requestRender()
+        return true
       case 'interrupt':
         // Same gesture as opencode: the first Esc arms a short window and the
         // spinner switches to "esc again to interrupt"; only the second press

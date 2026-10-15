@@ -106,9 +106,10 @@ export class LoopSession {
     this.#controller.stop(cause)
   }
 
-  /** `Esc` while parked between ticks: same as `/loop stop`, without the
-   *  typing. False when there is nothing waiting, so the caller can let the
-   *  key fall through to whatever else `Esc` means. */
+  /** The confirmed `Esc` while parked between ticks: same as `/loop stop`,
+   *  without the typing. The two-press window lives with the host's other
+   *  interrupts (`RunInteraction`), not here. False when there is nothing
+   *  waiting, so the caller can let the key fall through. */
   cancelWait(): boolean {
     if (!this.waiting) return false
     this.#controller.stop('user')
