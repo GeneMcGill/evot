@@ -35,13 +35,6 @@ export interface PromptFooterVM {
   gitBranch: string | null
   contextTokens: number
   contextWindow: number
-  /**
-   * Countdown to the next `/loop` wakeup while the agent is parked between
-   * ticks. The loop's decision (why it waits, when) is a card in the
-   * transcript; this is only its progress, so it rides on the status line next
-   * to the other runtime badges instead of taking a row of its own.
-   */
-  loopWait?: LoopWait
   backgroundProcessCount: number
   backgroundStopHint?: string
   backgroundStopPending?: boolean
@@ -98,17 +91,6 @@ function buildForkTrail(trail: readonly string[], columns: number): StyledLine |
   if (!text) return null
   return line(colored(FORK_GLYPH, 'cyan'), dim(` ${text}`))
 }
-
-export interface LoopWait {
-  /** Countdown as the badge prints it, e.g. `19m37s`. */
-  label: string
-  /** Milliseconds until the wakeup; drives the "about to wake" tone. */
-  remainingMs: number
-}
-
-/** Under a minute the loop is about to wake and the badge says so in the
- *  attention tone; above that it is just another runtime badge. */
-const LOOP_WAKE_SOON_MS = 60_000
 
 /**
  * The footer speaks in three tones and nothing else:
@@ -181,12 +163,6 @@ function buildBackgroundChip(
   return line(runtime(truncateTailToWidth(shortLabel, columns)))
 }
 
-/** `◌ loop 19m37s` in the runtime tone; the whole badge turns to the warn
- *  tone for the final minute so the user sees the wakeup coming. */
-function loopWaitBadge(wait: LoopWait): StyledSpan[] {
-  const text = `◌ loop ${wait.label}`
-  return [wait.remainingMs <= LOOP_WAKE_SOON_MS ? colored(text, 'yellow') : runtime(text)]
-}
 
 function buildFooter(input: PromptFooterVM, columns: number, modeShownAbove: boolean): ViewBlock {
   const cloud = input.cloudBadge ? `${input.cloudBadge} ` : ''
@@ -276,7 +252,6 @@ function buildFooterCandidate(
             : dim(text),
       ])
     }
-    if (input.loopWait) groups.push(loopWaitBadge(input.loopWait))
     return groups.flatMap((group, index) => index === 0 ? group : [dim(' │ '), ...group])
   }
 

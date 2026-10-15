@@ -559,6 +559,10 @@ describe('prompt frame', () => {
     expect(hint({ busy: true, queuedCount: 2 })).toBe('❭ 2 messages queued · Ctrl+G to manage')
     // A queue with nothing running is stale state, not a prompt to manage it.
     expect(hint({ busy: false, queuedCount: 2 })).toBe('❭ Enter a coding task or / for commands')
+    // A parked loop is still steerable; say how. A running turn wins over it.
+    expect(hint({ loopParked: true })).toBe('❭ Loop waiting · type to act now · /loop 15m to change pace · esc to stop')
+    expect(hint({ loopParked: true, busy: true })).toBe('❭ Guide the agent while it works')
+    expect(hint({ columns: 50, loopParked: true })).toBe('❭ Loop waiting · type · /loop 15m · esc')
     // Narrow terminals get the short forms.
     expect(hint({ columns: 40, busy: true })).toBe('❭ Guide while it works')
     expect(hint({ columns: 40, busy: true, queuedCount: 1 })).toBe('❭ 1 queued · Ctrl+G')
@@ -937,28 +941,11 @@ describe('prompt footer', () => {
     expect(footer).not.toContain('jev')
   })
 
-  test('shows the loop countdown as a badge after the context group', () => {
-    const footer = blocksToLines(buildPromptFooterBlocks(defaultInput({
-      columns: 160,
-      contextTokens: 91100,
-      contextWindow: 1000000,
-      loopWait: { label: '19m37s', remainingMs: 19 * 60_000 + 37_000 },
-    }))).map(stripAnsi)[0]!
-    expect(footer).toContain('context: 9.1% (91.1k/1M) │ ◌ loop 19m37s')
-    const idle = blocksToLines(buildPromptFooterBlocks(defaultInput({ columns: 160 }))).map(stripAnsi)[0]!
-    expect(idle).not.toContain('loop')
-  })
-
-  test('runtime badges share the brand tone; the loop turns yellow in its final minute', () => {
+  test('the background chip takes the brand tone, not cyan', () => {
     const { brandHex } = getTheme()
-    const render = (loopWait: { label: string; remainingMs: number }): string =>
-      blocksToLines(buildPromptFooterBlocks(defaultInput({ columns: 160, loopWait })))[0]!
-    const parked = render({ label: '19m37s', remainingMs: 19 * 60_000 + 37_000 })
-    expect(parked).toContain(chalk.hex(brandHex)('◌ loop 19m37s'))
     const chip = blocksToLines(buildPromptFooterBlocks(defaultInput({ columns: 160, backgroundProcessCount: 1 }))).join('\n')
     expect(chip).toContain(chalk.hex(brandHex)('1 background shell running'))
-    const soon = render({ label: '42s', remainingMs: 42_000 })
-    expect(soon).toContain(chalk.yellow('◌ loop 42s'))
+    expect(chip).not.toContain('loop')
   })
 
   test('the thinking tier word is dim; only the gauge cells carry the ramp', () => {

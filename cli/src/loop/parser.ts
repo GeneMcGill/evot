@@ -1,12 +1,31 @@
+import { BUILTIN_LOOP_TASK } from './builtin-task.js'
+
 export type LoopMode =
   | { kind: 'fixed'; intervalMs: number }
   | { kind: 'dynamic' }
 
+/**
+ * What a loop repeats. `label` is how the transcript, the wakeup reminders
+ * and `/loop status` name it: the user's own words for a user prompt, a fixed
+ * short name for the built-in task, whose prompt is a page long.
+ */
+export interface LoopTask {
+  prompt: string
+  label: string
+}
+
 export type LoopCommand =
   | { kind: 'stop' }
   | { kind: 'status' }
-  | { kind: 'start'; mode: LoopMode; prompt: string }
+  | { kind: 'start'; mode: LoopMode; task: LoopTask }
   | { kind: 'invalid'; reason: string }
+
+const LABEL_CHARS = 120
+
+export function userTask(prompt: string): LoopTask {
+  const label = prompt.length > LABEL_CHARS ? `${prompt.slice(0, LABEL_CHARS)}…` : prompt
+  return { prompt, label }
+}
 
 export const MIN_INTERVAL_MS = 60_000
 export const MAX_INTERVAL_MS = 3_600_000
@@ -45,13 +64,15 @@ export function parseLoopArgs(args: string): LoopCommand {
   }
 
   prompt = prompt.trim()
-  if (!prompt) return intervalMs === null ? { kind: 'status' } : { kind: 'invalid', reason: 'Usage: /loop [interval] <prompt>' }
+  // Bare `/loop` (with or without an interval) carries on with whatever the
+  // conversation is doing; `/loop status` is the explicit way to look at it.
+  const task = prompt ? userTask(prompt) : BUILTIN_LOOP_TASK
 
-  if (intervalMs === null) return { kind: 'start', mode: { kind: 'dynamic' }, prompt }
+  if (intervalMs === null) return { kind: 'start', mode: { kind: 'dynamic' }, task }
   if (intervalMs < MIN_INTERVAL_MS || intervalMs > MAX_INTERVAL_MS) {
     return { kind: 'invalid', reason: 'Interval must be between 1m and 1h.' }
   }
-  return { kind: 'start', mode: { kind: 'fixed', intervalMs }, prompt }
+  return { kind: 'start', mode: { kind: 'fixed', intervalMs }, task }
 }
 
 export function formatDuration(ms: number): string {

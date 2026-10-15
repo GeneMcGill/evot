@@ -36,6 +36,10 @@ export interface PromptVMInput extends PromptFooterVM {
   busy?: boolean
   /** Prompts waiting to reach the running turn. The placeholder points at their management shortcut. */
   queuedCount?: number
+  /** A `/loop` is parked between ticks. The placeholder then says the loop
+   *  is still steerable: a plain message runs now, `/loop <interval>` changes
+   *  the pace, `esc` ends it. */
+  loopParked?: boolean
 }
 
 export interface PromptLayoutOptions {
@@ -106,6 +110,9 @@ function placeholderHint(input: PromptVMInput, mode: PromptModeStyle, wide: bool
     return wide ? `${queued} ${noun} queued · Ctrl+G to manage` : `${queued} queued · Ctrl+G`
   }
   if (input.busy) return wide ? 'Guide the agent while it works' : 'Guide while it works'
+  if (input.loopParked) {
+    return wide ? 'Loop waiting · type to act now · /loop 15m to change pace · esc to stop' : 'Loop waiting · type · /loop 15m · esc'
+  }
   return wide ? mode.hint : mode.shortHint
 }
 

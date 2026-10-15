@@ -14,7 +14,7 @@ import { formatWallClock } from '../render/format.js'
 export const SCHEDULE_WAKEUP_SPEC = {
   name: 'schedule_wakeup',
   label: 'Schedule Wakeup',
-  description: `Schedule the next wakeup of the current /loop, or stop it. Write your status summary first, then call this exactly once as the final action of the turn; the turn ends when it returns. Prefer a long heartbeat (1200-1800s) whenever a background watcher is running; it will wake you the moment it exits. Pass stop: true when the loop's goal is reached or cannot progress.`,
+  description: `Schedule the next wakeup of the current /loop, or stop it. Write your status summary first, then call this exactly once as the final action of the turn; the turn ends when it returns. Prefer a long heartbeat (1200-1800s) whenever a background watcher is running; it will wake you the moment it exits. Pass stop: true when the loop's goal is reached or cannot progress. Outside a loop wakeup, in a turn the user started, call it only when they ask to change the loop's pace or stop it; otherwise leave the schedule alone.`,
   parameters_schema: {
     type: 'object',
     additionalProperties: false,

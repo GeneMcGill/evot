@@ -1,4 +1,4 @@
-import type { LoopMode } from './parser.js'
+import type { LoopMode, LoopTask } from './parser.js'
 
 export const MIN_DELAY_SECONDS = 60
 export const MAX_DELAY_SECONDS = 3600
@@ -12,7 +12,7 @@ export const MAX_CONSECUTIVE_ERRORS = 3
 export interface LoopSnapshot {
   active: boolean
   mode: LoopMode
-  prompt: string
+  task: LoopTask
   startedAt: number
   nextFireAt: number | null
   reason: string | null
@@ -71,11 +71,11 @@ export class LoopController {
     return this.#state?.mode.kind === 'dynamic'
   }
 
-  start(mode: LoopMode, prompt: string, now = Date.now()): void {
+  start(mode: LoopMode, task: LoopTask, now = Date.now()): void {
     this.#state = {
       active: true,
       mode,
-      prompt,
+      task,
       startedAt: now,
       nextFireAt: null,
       reason: null,
@@ -105,11 +105,15 @@ export class LoopController {
     if (now - state.startedAt > MAX_AGE_MS) this.stop('max_age')
   }
 
+  /** Set the next wakeup. On a fixed-interval loop this also becomes the new
+   *  interval, so "make it hourly" said mid-loop changes the pace for good
+   *  rather than for one tick. */
   schedule(input: ScheduleInput, now = Date.now()): number {
     const state = this.#state
     if (!state?.active) return 0
     const delay = clampDelaySeconds(input.delaySeconds)
     state.nextFireAt = now + delay * 1000
+    if (state.mode.kind === 'fixed') state.mode = { kind: 'fixed', intervalMs: delay * 1000 }
     state.reason = input.reason
     state.noopStreak = input.noop ? state.noopStreak + 1 : 0
     this.#rescheduledThisRun = true

@@ -54,8 +54,11 @@ export class LoopSession {
     return this.#controller.remainingMs() !== null
   }
 
+  /** The `schedule_wakeup` tool, offered on every turn while a loop is
+   *  active: a loop wakeup must call it, a user turn may, to change the pace
+   *  or stop when asked in plain words. */
   get extension(): HostToolExtension | undefined {
-    return this.#controller.isDynamic ? this.#extension : undefined
+    return this.#controller.active ? this.#extension : undefined
   }
 
   handleCommand(rawInput: string, args: string): void {
@@ -68,25 +71,30 @@ export class LoopSession {
         if (!this.#controller.stop('user')) this.#deps.notify('No loop is running.')
         return
       case 'status':
-        this.#deps.notify(this.statusLine() ?? 'No loop is running. Usage: /loop [interval] <prompt>')
+        this.#deps.notify(this.statusLine() ?? 'No loop is running. Usage: /loop [interval] [prompt]')
         return
       case 'start': {
         if (this.#controller.active) this.#controller.stop('user')
-        this.#controller.start(command.mode, command.prompt)
+        this.#controller.start(command.mode, command.task)
         this.#ensureTimer()
         this.#startRun()
-        this.#deps.runTurn(rawInput, buildLoopStartPrompt(command.mode, command.prompt), this.#extension)
+        this.#deps.runTurn(rawInput, buildLoopStartPrompt(command.mode, command.task.prompt), this.#extension)
         return
       }
     }
   }
 
-  beginRun(): void {
-    if (this.#runBegun) return
-    this.#startRun()
+  /** True from the moment the loop launches a turn (start or wakeup) until
+   *  the host reports it over with `endRun`. A turn the user types while the
+   *  loop is parked is not a loop run: the timer keeps counting, the
+   *  keepalive budget is untouched, and the next wakeup reads what happened
+   *  from the transcript like any other turn. */
+  get runInFlight(): boolean {
+    return this.#runBegun
   }
 
   endRun(outcome: RunOutcome): void {
+    if (!this.#runBegun) return
     this.#runBegun = false
     this.#controller.endRun(outcome)
     this.#flushStopNotice()
@@ -98,6 +106,18 @@ export class LoopSession {
     this.#controller.stop(cause)
   }
 
+  /** `Esc` while parked between ticks: same as `/loop stop`, without the
+   *  typing. False when there is nothing waiting, so the caller can let the
+   *  key fall through to whatever else `Esc` means. */
+  cancelWait(): boolean {
+    if (!this.waiting) return false
+    this.#controller.stop('user')
+    this.#flushStopNotice()
+    this.#syncWaiting()
+    this.#deps.requestRender()
+    return true
+  }
+
   statusLine(now = Date.now()): string | null {
     const snapshot = this.#controller.snapshot
     if (!snapshot) return null
@@ -106,7 +126,7 @@ export class LoopSession {
     const next = remaining === null ? 'running now' : `next wakeup in ${formatDuration(remaining)} (${clock(now + remaining)})`
     const noop = snapshot.noopStreak > 0 ? ` · ${snapshot.noopStreak} quiet` : ''
     const reason = snapshot.reason ? `\n  ${snapshot.reason}` : ''
-    return `◌ loop · ${mode} · tick ${snapshot.tick} · ${next}${noop} · since ${clock(snapshot.startedAt)}${reason}`
+    return `◌ loop · ${snapshot.task.label} · ${mode} · tick ${snapshot.tick} · ${next}${noop} · since ${clock(snapshot.startedAt)}${reason}`
   }
 
   /** The next wakeup as the status-line badge shows it: the `19m37s` label

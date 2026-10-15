@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'bun:test'
-import { parseLoopArgs, parseDuration, formatDuration } from '../src/loop/parser.js'
+import { parseLoopArgs, parseDuration, formatDuration, userTask } from '../src/loop/parser.js'
+import { BUILTIN_LOOP_PROMPT, BUILTIN_LOOP_TASK } from '../src/loop/builtin-task.js'
+import { formatLoopWaitLine } from '../src/loop/wait-line.js'
+import { getTheme } from '../src/render/theme/index.js'
+import chalk from 'chalk'
+import stripAnsi from 'strip-ansi'
 import {
   LoopController,
   clampDelaySeconds,
@@ -31,20 +36,37 @@ describe('parseLoopArgs', () => {
   })
 
   test('leading interval', () => {
-    expect(parseLoopArgs('5m check CI')).toEqual({ kind: 'start', mode: { kind: 'fixed', intervalMs: 300_000 }, prompt: 'check CI' })
+    expect(parseLoopArgs('5m check CI')).toEqual({ kind: 'start', mode: { kind: 'fixed', intervalMs: 300_000 }, task: { prompt: 'check CI', label: 'check CI' } })
   })
 
   test('trailing interval', () => {
-    expect(parseLoopArgs('check CI every 20m')).toEqual({ kind: 'start', mode: { kind: 'fixed', intervalMs: 1_200_000 }, prompt: 'check CI' })
+    expect(parseLoopArgs('check CI every 20m')).toEqual({ kind: 'start', mode: { kind: 'fixed', intervalMs: 1_200_000 }, task: { prompt: 'check CI', label: 'check CI' } })
   })
 
   test('no interval is dynamic', () => {
-    expect(parseLoopArgs('watch PR 123')).toEqual({ kind: 'start', mode: { kind: 'dynamic' }, prompt: 'watch PR 123' })
+    expect(parseLoopArgs('watch PR 123')).toEqual({ kind: 'start', mode: { kind: 'dynamic' }, task: { prompt: 'watch PR 123', label: 'watch PR 123' } })
   })
 
   test('rejects empty prompt and out-of-range interval', () => {
-    expect(parseLoopArgs('').kind).toBe('status')
-    expect(parseLoopArgs('5m').kind).toBe('invalid')
+    expect(parseLoopArgs('10s x').kind).toBe('invalid')
+    expect(parseLoopArgs('2h x').kind).toBe('invalid')
+  })
+
+  test('bare /loop continues the conversation, self-paced or on the given interval', () => {
+    expect(parseLoopArgs('')).toEqual({ kind: 'start', mode: { kind: 'dynamic' }, task: BUILTIN_LOOP_TASK })
+    expect(parseLoopArgs('15m')).toEqual({ kind: 'start', mode: { kind: 'fixed', intervalMs: 900_000 }, task: BUILTIN_LOOP_TASK })
+    expect(BUILTIN_LOOP_TASK.label).toBe('continue this work')
+    expect(BUILTIN_LOOP_PROMPT).toContain('read the')
+    expect(BUILTIN_LOOP_PROMPT).toContain('If the conversation is driving a pull request')
+    expect(BUILTIN_LOOP_PROMPT).toContain('If unsure, wait once more rather than stop')
+  })
+
+  test('a long user prompt is labelled by its first 120 characters', () => {
+    const long = 'x'.repeat(200)
+    const command = parseLoopArgs(long)
+    if (command.kind !== 'start') throw new Error(command.kind)
+    expect(command.task.prompt).toBe(long)
+    expect(command.task.label).toBe(`${'x'.repeat(120)}…`)
     expect(parseLoopArgs('10s x').kind).toBe('invalid')
     expect(parseLoopArgs('2h x').kind).toBe('invalid')
   })
@@ -72,7 +94,7 @@ describe('clampDelaySeconds', () => {
 describe('LoopController', () => {
   test('fixed mode advances nextFireAt at run end', () => {
     const { c } = controller()
-    c.start({ kind: 'fixed', intervalMs: 60_000 }, 'p', 1000)
+    c.start({ kind: 'fixed', intervalMs: 60_000 }, userTask('p'), 1000)
     c.beginRun(1000)
     c.endRun('ok', 5000)
     expect(c.remainingMs(5000)).toBe(60_000)
@@ -81,7 +103,7 @@ describe('LoopController', () => {
 
   test('dynamic schedule overrides and counts noop streak', () => {
     const { c } = controller()
-    c.start({ kind: 'dynamic' }, 'p', 0)
+    c.start({ kind: 'dynamic' }, userTask('p'), 0)
     c.beginRun(0)
     expect(c.schedule({ delaySeconds: 120, reason: 'a', noop: true }, 0)).toBe(120)
     c.endRun('ok', 1)
@@ -94,7 +116,7 @@ describe('LoopController', () => {
 
   test('keepalive once, then stop', () => {
     const { c, stops } = controller()
-    c.start({ kind: 'dynamic' }, 'p', 0)
+    c.start({ kind: 'dynamic' }, userTask('p'), 0)
     c.beginRun(0)
     c.endRun('ok', 0)
     expect(c.active).toBe(true)
@@ -107,7 +129,7 @@ describe('LoopController', () => {
 
   test('consecutive errors stop the loop', () => {
     const { c, stops } = controller()
-    c.start({ kind: 'fixed', intervalMs: 60_000 }, 'p', 0)
+    c.start({ kind: 'fixed', intervalMs: 60_000 }, userTask('p'), 0)
     for (let i = 0; i < MAX_CONSECUTIVE_ERRORS; i++) {
       c.beginRun(i)
       c.endRun('error', i)
@@ -117,7 +139,7 @@ describe('LoopController', () => {
 
   test('error counter resets on success', () => {
     const { c } = controller()
-    c.start({ kind: 'fixed', intervalMs: 60_000 }, 'p', 0)
+    c.start({ kind: 'fixed', intervalMs: 60_000 }, userTask('p'), 0)
     c.beginRun(0); c.endRun('error', 0)
     c.beginRun(1); c.endRun('error', 1)
     c.beginRun(2); c.endRun('ok', 2)
@@ -127,14 +149,14 @@ describe('LoopController', () => {
 
   test('max age stops at run start', () => {
     const { c, stops } = controller()
-    c.start({ kind: 'dynamic' }, 'p', 0)
+    c.start({ kind: 'dynamic' }, userTask('p'), 0)
     c.beginRun(MAX_AGE_MS + 1)
     expect(stops).toEqual(['max_age'])
   })
 
   test('stop is idempotent', () => {
     const { c, stops } = controller()
-    c.start({ kind: 'dynamic' }, 'p', 0)
+    c.start({ kind: 'dynamic' }, userTask('p'), 0)
     expect(c.stop('user')).not.toBeNull()
     expect(c.stop('user')).toBeNull()
     expect(stops).toEqual(['user'])
@@ -152,7 +174,7 @@ describe('schedule_wakeup host tool', () => {
 
   test('requires delay unless stop', async () => {
     const { c } = controller()
-    c.start({ kind: 'dynamic' }, 'p', 0)
+    c.start({ kind: 'dynamic' }, userTask('p'), 0)
     const ext = createLoopExtension(c)
     const missing = await ext.dispatch(call({ reason: 'x' }))
     expect(missing.is_error).toBe(true)
@@ -164,7 +186,7 @@ describe('schedule_wakeup host tool', () => {
 
   test('stop ends the loop', async () => {
     const { c, stops } = controller()
-    c.start({ kind: 'dynamic' }, 'p', 0)
+    c.start({ kind: 'dynamic' }, userTask('p'), 0)
     const ext = createLoopExtension(c)
     const res = await ext.dispatch(call({ stop: true, reason: 'converged' }))
     expect(res.is_error).toBe(false)
@@ -216,7 +238,7 @@ describe('prompts', () => {
 
   test('wakeup prompt is short and tick-numbered', () => {
     const text = buildLoopWakeupPrompt({
-      active: true, mode: { kind: 'dynamic' }, prompt: 'x'.repeat(200), startedAt: 0,
+      active: true, mode: { kind: 'dynamic' }, task: userTask('x'.repeat(200)), startedAt: 0,
       nextFireAt: null, reason: null, tick: 7, noopStreak: 0,
     })
     expect(text).toContain('#7')
@@ -249,13 +271,26 @@ describe('LoopSession', () => {
     s.dispose()
   })
 
-  test('dynamic exposes extension, fixed does not', () => {
+  test('the schedule_wakeup tool is offered while any loop is active', () => {
     const { s } = session()
+    expect(s.extension).toBeUndefined()
     s.handleCommand('/loop a', 'a')
     expect(s.extension).toBeDefined()
     s.handleCommand('/loop 5m b', '5m b')
+    expect(s.extension).toBeDefined()
+    s.handleCommand('/loop stop', 'stop')
     expect(s.extension).toBeUndefined()
     s.dispose()
+  })
+
+  test('schedule on a fixed loop changes its interval for good', () => {
+    const c = new LoopController({ stopped: () => {} })
+    c.start({ kind: 'fixed', intervalMs: 300_000 }, userTask('p'), 0)
+    c.beginRun(0)
+    c.schedule({ delaySeconds: 3600, reason: 'hourly now', noop: false }, 0)
+    expect(c.snapshot?.mode).toEqual({ kind: 'fixed', intervalMs: 3_600_000 })
+    c.endRun('ok', 10_000)
+    expect(c.snapshot?.nextFireAt).toBe(10_000 + 3_600_000)
   })
 
   test('stop and status notices', () => {
@@ -285,14 +320,21 @@ describe('LoopSession', () => {
     s.dispose()
   })
 
-  test('endRun error streak stops with notice', () => {
-    const { s, notices } = session()
+  test('a run is in flight only between the loop launching a turn and endRun', () => {
+    const { s } = session()
+    expect(s.runInFlight).toBe(false)
     s.handleCommand('/loop 1m x', '1m x')
+    expect(s.runInFlight).toBe(true)
     s.endRun('error')
-    s.beginRun(); s.endRun('error')
-    s.beginRun(); s.endRun('error')
-    expect(s.active).toBe(false)
-    expect(notices.at(-1)).toContain('consecutive run errors')
+    expect(s.runInFlight).toBe(false)
+    expect(s.active).toBe(true)
+    // A user turn while parked is not a loop run: endRun without a loop
+    // launch is a no-op, the timer and error streak are untouched.
+    const before = s.waitRemaining()
+    s.endRun('error')
+    s.endRun('error')
+    expect(s.active).toBe(true)
+    expect(s.waitRemaining()?.remainingMs).toBe(before?.remainingMs)
     s.dispose()
   })
 })
@@ -388,5 +430,45 @@ describe('LoopSession waiting state', () => {
     session.handleCommand('/loop stop', 'stop')
     expect(transitions).toEqual([true, false])
     session.dispose()
+  })
+
+  test('cancelWait stops a parked loop and is a no-op otherwise', async () => {
+    const { LoopSession } = await import('../src/loop/session.js')
+    const notices: string[] = []
+    let extension: HostToolExtension | undefined
+    const session = new LoopSession({
+      runTurn: (_line, _prompt, ext) => { extension = ext },
+      canWake: () => true,
+      notify: line => notices.push(line),
+      requestRender: () => {},
+      waitingChanged: () => {},
+    })
+    expect(session.cancelWait()).toBe(false)
+    session.handleCommand('/loop watch', 'watch')
+    expect(session.cancelWait()).toBe(false) // a run is in flight; Esc belongs to it
+    if (!extension) throw new Error('no extension')
+    await extension.dispatch({ tool_call_id: '1', tool_name: 'schedule_wakeup', arguments: { delay_seconds: 600, reason: 'r' } })
+    session.endRun('ok')
+    expect(session.waiting).toBe(true)
+    expect(session.cancelWait()).toBe(true)
+    expect(session.waiting).toBe(false)
+    expect(notices.some(n => n.includes('stopped by you'))).toBe(true)
+    expect(session.cancelWait()).toBe(false)
+    session.dispose()
+  })
+})
+
+describe('formatLoopWaitLine', () => {
+  test('names the wait and folds in a background watcher', () => {
+    const alone = formatLoopWaitLine({ remainingMs: 18 * 60_000 + 30_000 })
+    expect(stripAnsi(alone)).toBe('◌ loop · wakes in 18m30s')
+    const withBg = formatLoopWaitLine({ remainingMs: 18 * 60_000 + 30_000, backgroundElapsedMs: 95_000 })
+    expect(stripAnsi(withBg)).toBe('◌ loop · wakes in 18m30s · watching a background task (1m35s)')
+  })
+
+  test('brand tone while parked, yellow in the final minute', () => {
+    const { brandHex } = getTheme()
+    expect(formatLoopWaitLine({ remainingMs: 600_000 })).toContain(chalk.hex(brandHex)('◌ loop · wakes in 10m'))
+    expect(formatLoopWaitLine({ remainingMs: 42_000 })).toContain(chalk.yellow('◌ loop · wakes in 42s'))
   })
 })

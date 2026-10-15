@@ -3,8 +3,6 @@ import { formatDuration } from './parser.js'
 import type { LoopSnapshot } from './controller.js'
 import { MIN_DELAY_SECONDS, MAX_DELAY_SECONDS } from './controller.js'
 
-const PROMPT_EXCERPT_CHARS = 120
-
 const SHARED_RULES = [
   'Prefer event-driven waiting over polling: when something external must happen (CI, a review, a deploy), start one background shell command that blocks until the condition changes and exits, so its completion wakes you immediately.',
   'Never busy-poll with short wakeups while a background watcher is running.',
@@ -40,9 +38,7 @@ export function buildLoopStartPrompt(mode: LoopMode, prompt: string): string {
 
 export function buildLoopWakeupPrompt(snapshot: LoopSnapshot, now = Date.now()): string {
   const time = new Date(now).toTimeString().slice(0, 5)
-  const excerpt = snapshot.prompt.length > PROMPT_EXCERPT_CHARS
-    ? `${snapshot.prompt.slice(0, PROMPT_EXCERPT_CHARS)}…`
-    : snapshot.prompt
+  const excerpt = snapshot.task.label
   const tail = snapshot.mode.kind === 'dynamic'
     ? ' End with schedule_wakeup.'
     : ''

@@ -175,6 +175,7 @@ import { buildRunFooterLine } from '../render/run-footer.js'
 import { RunThinking } from '../render/run-thinking.js'
 import { TaskSession } from '../task/session.js'
 import { LoopSession } from '../loop/session.js'
+import { formatLoopWaitLine } from '../loop/wait-line.js'
 import { ensureFeishuDelivery } from '../channels/feishu/setup.js'
 import { waitForSetup } from '../channels/setup-wait.js'
 import { TASK_RUNTIME_DEFAULT_MODEL } from '../task/types.js'
@@ -219,6 +220,9 @@ export interface ReplOptions {
   serverPort?: number
   envFile?: string
 }
+
+/** Tab-title frames for a parked loop: a clock hand sweeping a quarter turn per tick. */
+const LOOP_TITLE_CLOCK = ['◴', '◷', '◶', '◵'] as const
 
 export async function startRepl(opts: ReplOptions): Promise<void> {
   const { agent } = opts
@@ -312,9 +316,12 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
   // flag, so the glyph would linger on the tab until the next title write.
   // An in-flight run repaints its own frames; otherwise restore the idle
   // marker the same way overlays like /sessions leave it.
+  // The tab bar is drawn in the system UI font, where U+25CC `◌` (used in
+  // the transcript) often falls back to a bare dot; the clock faces are in
+  // every UI font, and the wait timer below animates them while parked.
   const idleWaitTitle = (): string => {
-    if (loopSession.waiting) return '◌ loop'
-    if (backgroundWaitSince !== null) return '◌ bg'
+    if (loopSession.waiting) return `${LOOP_TITLE_CLOCK[0]} loop`
+    if (backgroundWaitSince !== null) return '○ bg'
     return '✳'
   }
   const unfreezeTerminalTitle = () => {
@@ -1597,8 +1604,8 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
       backgroundStopHint,
       backgroundStopPending: interaction.interruptPending,
       busy: isLoading,
+      loopParked: !isLoading && loopSession.waiting,
       queuedCount: queuedUserMessages.length + queuedCompactionSubmissions.length,
-      loopWait: !isLoading && loopSession.waiting ? loopSession.waitRemaining() ?? undefined : undefined,
     })
   }
 
@@ -1812,10 +1819,22 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
         // Separating blank above the status row; queue rows bring their own.
         marginTop: 1,
       }
+    } else if (!isLoading && overlay.kind !== 'ask-user' && loopSession.waiting) {
+      // Parked between loop ticks. The wakeup card in the transcript says why;
+      // this row says until when, and absorbs a background watcher's wait
+      // when one is running, so the two never stack.
+      const wait = loopSession.waitRemaining()
+      if (wait) {
+        const waitText = formatLoopWaitLine({
+          remainingMs: wait.remainingMs,
+          backgroundElapsedMs: backgroundWaitSince === null ? undefined : Date.now() - backgroundWaitSince,
+        })
+        spinnerBlock = {
+          lines: wrapTextWithAnsi(waitText, renderer.termCols).map(text => ({ spans: [{ text }] })),
+          marginTop: 1,
+        }
+      }
     } else if (backgroundWaitSince !== null && overlay.kind !== 'ask-user') {
-      // A loop parked between ticks draws no row here: the wakeup card in the
-      // transcript says why and when, and the countdown rides on the prompt
-      // footer as the `◌ loop` badge. Only a background wait earns a row.
       //
       // Idle, but a detached task is still running and will wake the agent when
       // it finishes. Without a status row here the transcript looks finished, so
@@ -2331,8 +2350,16 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
     if (!loopWaiting && backgroundWaitSince === null) return
     backgroundWaitSpinner = advanceSpinner(backgroundWaitSpinner)
     if (backgroundWaitSpinner.frame % TITLE_INTERVAL_FRAMES === 0) {
-      const glyph = ['⠂', '⠐'][titleFrame++ % 2]
-      setTerminalTitle(loopWaiting ? `${glyph} loop` : `${glyph} bg ${backgroundTerminals.runningCount()}`)
+      // A running turn blinks two braille dots in the tab. A parked loop is a
+      // different state, waiting for a clock, so it gets a clock: the hand
+      // sweeps a quarter turn per tick and is unmistakable next to the dots.
+      // A background wait keeps the dots: the agent is waiting on work.
+      const frame = titleFrame++
+      if (loopWaiting) {
+        setTerminalTitle(`${LOOP_TITLE_CLOCK[frame % LOOP_TITLE_CLOCK.length]} loop`)
+      } else {
+        setTerminalTitle(`${['⠂', '⠐'][frame % 2]} bg ${backgroundTerminals.runningCount()}`)
+      }
     }
     renderer.requestRender()
   }, SPINNER_INTERVAL_MS)
@@ -2363,9 +2390,13 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
     hostToolExtension?: HostToolExtension,
   ) {
     if (queryBlockedByCloudLogin()) return
-    hostToolExtension = composeExtensions(hostToolExtension, loopSession.extension)
-    const loopRun = loopSession.active
-    if (loopRun) loopSession.beginRun()
+    // Only a turn the loop itself launched is a loop run. A message the user
+    // types while the loop is parked runs as an ordinary turn: the wakeup
+    // timer keeps counting and the loop's reschedule contract does not apply.
+    // The tool is still offered, so "make it hourly" or "stop the loop" said
+    // in plain words takes effect now instead of at the next wakeup.
+    const loopRun = loopSession.runInFlight
+    if (loopSession.active) hostToolExtension = composeExtensions(hostToolExtension, loopSession.extension)
     // Notification-only wakeups continue the same user task; don't hide its
     // newly completed background work when the engine reads the result.
     if (text || contentJson || prebuiltStream) backgroundTerminals.beginRun()
@@ -2589,6 +2620,12 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
         commitSystem('sys-queue-edit-lock', '  Finish or discard the queued prompt edit first.')
         return
       }
+    }
+    // Parked between loop ticks, with the composer idle: Esc cancels the
+    // pending wakeup, the gesture the `◌ loop … · esc` footer badge advertises.
+    if (event.type === 'escape' && !isLoading && overlay.kind === 'none' && !editor.completion
+      && loopSession.cancelWait()) {
+      return
     }
     if (isQueueManageShortcut(event)) {
       if (overlay.kind === 'selector' && overlay.state.owner === SELECTOR_OWNER.queue) {
