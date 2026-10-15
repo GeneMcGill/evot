@@ -1298,6 +1298,55 @@ async fn the_notification_summary_names_the_outcome_per_status() -> Result<(), B
 }
 
 #[tokio::test]
+async fn a_long_script_is_previewed_not_echoed_in_the_notification() -> Result<(), Box<dyn Error>> {
+    // The summary is a user turn the model reads before choosing its next tool
+    // call. A whole heredoc script echoed there is the text a model copies
+    // back into `bash.command`, and a long one with quotes and braces is where
+    // Gemini (via Devin, 2026-10-15) kept producing malformed function calls.
+    // The output file keeps the full record; the summary only identifies the task.
+    let dir = tempfile::tempdir()?;
+    let manager = Arc::new(ProcessManager::new());
+    let bash = BashTool::new().with_process_manager(manager.clone());
+    let script = format!(
+        "cat << 'PY' | python3 -\nimport json\nrows = [{{'k': i, 'v': \"x\" * i}} for i in range(3)]\n{}\nprint(json.dumps(rows))\nPY",
+        "# padding line to push the script well past the preview\n".repeat(8)
+    );
+    assert!(script.chars().count() > 400);
+
+    let started = bash
+        .execute(
+            serde_json::json!({"command": script, "run_in_background": true}),
+            context("bash", dir.path()),
+        )
+        .await?;
+    let id = task_id(&started)?;
+    manager
+        .wait(id, Duration::from_secs(5))
+        .await
+        .ok_or("task disappeared")?;
+
+    let notifications = manager.take_notifications();
+    assert_eq!(notifications.len(), 1);
+    let notification = &notifications[0];
+    let summary = notification
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("<summary>")
+                .and_then(|l| l.strip_suffix("</summary>"))
+        })
+        .ok_or("no summary line")?;
+    // `<`/`>` are already stripped by the anti-forgery rule, hence `cat 'PY'`.
+    assert!(
+        summary.starts_with("Command \"cat 'PY' | python3 - import json"),
+        "{summary}"
+    );
+    assert!(summary.contains("…\" completed"), "{summary}");
+    assert!(!summary.contains("print(json.dumps(rows))"), "{summary}");
+    assert!(summary.chars().count() < 220, "{summary}");
+    Ok(())
+}
+
+#[tokio::test]
 async fn a_command_containing_angle_brackets_cannot_forge_notification_tags(
 ) -> Result<(), Box<dyn Error>> {
     // The summary embeds the command inside XML the model parses. An unescaped

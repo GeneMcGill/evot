@@ -1047,10 +1047,22 @@ fn format_notification(snapshot: &ProcessSnapshot) -> String {
     )
 }
 
+/// Longest command echoed back into a notification summary.
+///
+/// The summary is a user-turn message the model reads, and the model then
+/// re-emits whatever it decides to run next as a tool-call argument. A full
+/// heredoc script echoed here (quotes, braces, `$` expansions) is exactly the
+/// text the model is most likely to copy into its next `bash.command`, and
+/// one provider (Gemini via Devin, 2026-10-15) produced a malformed function
+/// call for that turn 19 times in a row until the script was removed from the
+/// notification. The output file still holds everything; the summary only
+/// needs to identify the task.
+const NOTIFICATION_COMMAND_CHARS: usize = 160;
+
 fn notification_summary(snapshot: &ProcessSnapshot) -> String {
     // Keep the published single-line envelope intact, even for multiline scripts
     // and descriptions containing XML-like text.
-    let command = notification_text(&snapshot.command);
+    let command = notification_command(&snapshot.command);
     let outcome = match snapshot.status {
         ProcessStatus::Completed => format!("Command \"{}\" completed", command),
         ProcessStatus::Failed => format!("Command \"{}\" failed", command),
@@ -1082,4 +1094,17 @@ fn notification_text(text: &str) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// The command as the summary quotes it: single-line, bounded to
+/// [`NOTIFICATION_COMMAND_CHARS`], cut at a character boundary with a marker so
+/// the model knows the text is a preview and not something it can re-run.
+fn notification_command(command: &str) -> String {
+    let text = notification_text(command);
+    if text.chars().count() <= NOTIFICATION_COMMAND_CHARS {
+        return text;
+    }
+    let mut preview: String = text.chars().take(NOTIFICATION_COMMAND_CHARS).collect();
+    preview.truncate(preview.trim_end().len());
+    format!("{preview}…")
 }
