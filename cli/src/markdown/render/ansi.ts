@@ -578,13 +578,60 @@ export function formatToken(
           ),
         )
         .join('')
-    case 'list_item':
+    case 'list_item': {
+      const listItem = token as Tokens.ListItem
+      const marker = orderedListNumber === null
+        ? '-'
+        : `${getListNumber(listDepth + 1, orderedListNumber)}.`
+      // GFM task-list checkbox: marked sets task/checked on the list_item and
+      // strips the `[ ]`/`[x]` from the item text. Re-emit it after the bullet
+      // so todo state survives rendering (matches pi's TUI behaviour).
+      const checkbox = listItem.task ? `[${listItem.checked ? 'x' : ' '}] ` : ''
+      // Tint the marker (bullet or ordinal) with the list accent so the list
+      // structure reads at a glance, matching pi's mdListBullet. Ordered and
+      // unordered markers use the same accent; the checkbox stays uncoloured
+      // so todo state (the [x]/[ ] glyph) isn't lost in the accent hue.
+      const markerStyle = orderedListNumber === null ? theme.bullet : theme.listNumber
+      const coloredMarker = markerStyle.paint(marker)
+      const prefix = `${coloredMarker} ${checkbox}`
+      const depthPad = '  '.repeat(listDepth)
+      const firstIndent = `${depthPad}${prefix}`
+      // terminalDisplayWidth strips ANSI before measuring, so the accent
+      // colour on the marker doesn't inflate the continuation indent width.
+      const restIndent = `${depthPad}${' '.repeat(terminalDisplayWidth(prefix))}`
+
+      let emittedFirstText = false
       return (token.tokens ?? [])
-        .map(
-          t =>
-            `${'  '.repeat(listDepth)}${formatToken(t, listDepth + 1, orderedListNumber, token, theme)}`,
-        )
+        .map(t => {
+          if (t.type === 'list') {
+            return formatToken(t, listDepth + 1, null, token, theme)
+          }
+          if (t.type === 'space') {
+            return EOL
+          }
+          if (t.type === 'text' || t.type === 'paragraph') {
+            const inner = t.tokens
+              ? t.tokens.map(child => formatToken(child, listDepth + 1, orderedListNumber, t, theme)).join('')
+              : linkifyIssueRefs(applyPangu(t.text))
+            const startIndent = emittedFirstText ? restIndent : firstIndent
+            emittedFirstText = true
+            return `${wrapDisplayTextWithIndent(inner, startIndent, restIndent)}${EOL}`
+          }
+          const rendered = formatToken(t, listDepth + 1, orderedListNumber, token, theme)
+          const trimmed = rendered.replace(/\n$/, '')
+          const lines = trimmed.split(EOL)
+          return lines
+            .map((line, index) => {
+              if (!emittedFirstText && index === 0) {
+                emittedFirstText = true
+                return `${firstIndent}${line}`
+              }
+              return line.length > 0 ? `${restIndent}${line}` : line
+            })
+            .join(EOL) + (rendered.endsWith(EOL) ? EOL : '')
+        })
         .join('')
+    }
     case 'paragraph': {
       const rendered = (token.tokens ?? [])
         .map(t => formatToken(t, 0, null, null, theme))
@@ -611,32 +658,6 @@ export function formatToken(
     case 'text': {
       if (parent?.type === 'link') {
         return token.text
-      }
-      if (parent?.type === 'list_item') {
-        const marker = orderedListNumber === null
-          ? '-'
-          : `${getListNumber(listDepth, orderedListNumber)}.`
-        // GFM task-list checkbox: marked sets task/checked on the list_item and
-        // strips the `[ ]`/`[x]` from the item text. Re-emit it after the bullet
-        // so todo state survives rendering (matches pi's TUI behaviour).
-        const listItem = parent as Tokens.ListItem
-        const checkbox = listItem.task ? `[${listItem.checked ? 'x' : ' '}] ` : ''
-        // Tint the marker (bullet or ordinal) with the list accent so the list
-        // structure reads at a glance, matching pi's mdListBullet. Ordered and
-        // unordered markers use the same accent; the checkbox stays uncoloured
-        // so todo state (the [x]/[ ] glyph) isn't lost in the accent hue.
-        const markerStyle = orderedListNumber === null ? theme.bullet : theme.listNumber
-        const coloredMarker = markerStyle.paint(marker)
-        const prefix = `${coloredMarker} ${checkbox}`
-        const depthPad = '  '.repeat(Math.max(0, listDepth - 1))
-        const firstIndent = `${depthPad}${prefix}`
-        // terminalDisplayWidth strips ANSI before measuring, so the accent
-        // colour on the marker doesn't inflate the continuation indent width.
-        const restIndent = `${depthPad}${' '.repeat(terminalDisplayWidth(prefix))}`
-        const inner = token.tokens
-          ? token.tokens.map(t => formatToken(t, listDepth, orderedListNumber, token, theme)).join('')
-          : linkifyIssueRefs(applyPangu(token.text))
-        return `${wrapDisplayTextWithIndent(inner, firstIndent, restIndent)}${EOL}`
       }
       if (token.tokens) {
         return token.tokens.map(t => formatToken(t, listDepth, orderedListNumber, token, theme)).join('')

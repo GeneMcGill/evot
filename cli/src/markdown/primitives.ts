@@ -41,10 +41,12 @@ export function wrapDisplayTextWithIndent(
   restIndent: string,
   width = terminalContentWidth(),
 ): string {
-  const innerWidth = Math.max(1, width - terminalDisplayWidth(firstIndent))
+  const firstInnerWidth = Math.max(1, width - terminalDisplayWidth(firstIndent))
+  const restInnerWidth = Math.max(1, width - terminalDisplayWidth(restIndent))
   return text
     .split(EOL)
-    .flatMap(line => {
+    .flatMap((line, lineIndex) => {
+      const innerWidth = lineIndex === 0 ? firstInnerWidth : restInnerWidth
       if (!line || BOX_DRAWING_RE.test(stripAnsi(line))) return [line]
       return wrapTextWithAnsi(line, innerWidth)
     })

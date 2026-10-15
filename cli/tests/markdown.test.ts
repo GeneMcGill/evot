@@ -1140,6 +1140,40 @@ describe('task-list checkboxes', () => {
     expect(result).toContain('- nested normal')
   })
 
+  test('aligns all sibling items and wrapped continuations in deeply nested lists', () => {
+    const restore = withColumns(44)
+    try {
+      const md = [
+        '1. Top item:',
+        '   - Bullet A:',
+        '     1. Sub one',
+        '     2. Sub two',
+        '   - Bullet B:',
+        '     continuation line under Bullet B',
+        '     - Deep bullet 1 with a long line that wraps onto the next row',
+        '     - Deep bullet 2',
+      ].join('\n')
+      const lines = stripAnsi(renderMarkdown(md)).split('\n')
+
+      expect(lines).toEqual([
+        '1. Top item:',
+        '  - Bullet A:',
+        '    i. Sub one',
+        '    ii. Sub two',
+        '  - Bullet B:',
+        '    continuation line under Bullet B',
+        '    - Deep bullet 1 with a long line',
+        '      that wraps onto the next row',
+        '    - Deep bullet 2',
+      ])
+      for (const line of lines) {
+        expect(stringWidth(line)).toBeLessThanOrEqual(40)
+      }
+    } finally {
+      restore()
+    }
+  })
+
   test('wrapped task item aligns continuation under the text', () => {
     const restore = withColumns(40)
     try {
