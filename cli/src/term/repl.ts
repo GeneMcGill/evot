@@ -1583,7 +1583,10 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
 
   function getPromptVM(): PromptVMInput {
     const interaction = runInteraction.snapshot(runInteractionInput())
-    const backgroundStopHint = overlay.kind !== 'none' || editor.completion ? undefined
+    // While a loop is parked, Esc stops the loop (the placeholder says so),
+    // so the chip must not advertise a second meaning for the same key.
+    const loopParked = !isLoading && loopSession.waiting
+    const backgroundStopHint = overlay.kind !== 'none' || editor.completion || loopParked ? undefined
       : interaction.kind === 'waiting-background' && interaction.backgroundStopping ? 'Stopping…'
       : interaction.interruptTarget === 'background'
         ? interaction.interruptPending ? `esc again to stop all ${interaction.backgroundTasks} task${interaction.backgroundTasks === 1 ? '' : 's'}` : 'esc twice to stop all'
@@ -1604,7 +1607,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
       backgroundStopHint,
       backgroundStopPending: interaction.interruptPending,
       busy: isLoading,
-      loopParked: !isLoading && loopSession.waiting,
+      loopParked,
       queuedCount: queuedUserMessages.length + queuedCompactionSubmissions.length,
     })
   }
@@ -1821,14 +1824,11 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
       }
     } else if (!isLoading && overlay.kind !== 'ask-user' && loopSession.waiting) {
       // Parked between loop ticks. The wakeup card in the transcript says why;
-      // this row says until when, and absorbs a background watcher's wait
-      // when one is running, so the two never stack.
+      // this row says until when. A background shell the agent left running
+      // is the footer chip's business, not this row's.
       const wait = loopSession.waitRemaining()
       if (wait) {
-        const waitText = formatLoopWaitLine({
-          remainingMs: wait.remainingMs,
-          backgroundElapsedMs: backgroundWaitSince === null ? undefined : Date.now() - backgroundWaitSince,
-        })
+        const waitText = formatLoopWaitLine({ remainingMs: wait.remainingMs })
         spinnerBlock = {
           lines: wrapTextWithAnsi(waitText, renderer.termCols).map(text => ({ spans: [{ text }] })),
           marginTop: 1,

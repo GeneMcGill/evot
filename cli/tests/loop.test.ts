@@ -459,11 +459,9 @@ describe('LoopSession waiting state', () => {
 })
 
 describe('formatLoopWaitLine', () => {
-  test('names the wait and folds in a background watcher', () => {
-    const alone = formatLoopWaitLine({ remainingMs: 18 * 60_000 + 30_000 })
-    expect(stripAnsi(alone)).toBe('◌ loop · wakes in 18m30s')
-    const withBg = formatLoopWaitLine({ remainingMs: 18 * 60_000 + 30_000, backgroundElapsedMs: 95_000 })
-    expect(stripAnsi(withBg)).toBe('◌ loop · wakes in 18m30s · watching a background task (1m35s)')
+  test('says only how long until the next wakeup', () => {
+    const line = formatLoopWaitLine({ remainingMs: 18 * 60_000 + 30_000 })
+    expect(stripAnsi(line)).toBe('◌ loop · wakes in 18m30s')
   })
 
   test('brand tone while parked, yellow in the final minute', () => {
