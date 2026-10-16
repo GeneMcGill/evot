@@ -22,9 +22,10 @@ pub enum Command {
     /// into the memory vault through a normal LLM turn. Bare `/clip` is a TUI
     /// command that saves the latest assistant reply locally.
     ClipSession,
-    /// `/sessions <query> [--days N | --since 2w | --all]` — search past
-    /// sessions by meaning with the session-search skill over locally prepared
-    /// evidence. Bare `/sessions` is a TUI command (the resume selector).
+    /// `/sessions <request>` — find past sessions by meaning. The model reads
+    /// the time range and topic from the request itself and scans the archive
+    /// through the run-scoped `session_search` tool. Bare `/sessions` is a TUI
+    /// command (the resume selector).
     SessionSearch(crate::search::SessionSearch),
     UsageError(String),
 }
@@ -160,7 +161,7 @@ pub fn is_queued_command(text: &str) -> bool {
             !name.is_empty()
                 && name
                     .bytes()
-                    .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
+                    .all(|byte| byte.is_ascii_alphabetic() || byte == b'_')
         }
         None => false,
     }
@@ -199,7 +200,8 @@ pub fn parse_command(text: &str) -> Option<Command> {
         return Some(match crate::search::SessionSearch::parse(args) {
             Some(search) => Command::SessionSearch(search),
             None => Command::UsageError(
-                "Usage: /sessions <query> [--days N | --since 2w | --all]".to_string(),
+                "Usage: /sessions <what you are looking for, optionally with a time range>"
+                    .to_string(),
             ),
         });
     }

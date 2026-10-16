@@ -141,3 +141,61 @@ pub(crate) fn prompt_tools() -> Vec<Box<dyn evot_engine::AgentTool>> {
         Box::new(WriteFileTool::new()),
     ]
 }
+
+/// Adapt a shared tool to the engine's boxed tool list. Run-scoped tools are
+/// cloned into every turn of the run, so they are held by `Arc` and keep
+/// per-run state (e.g. a call counter) across turns.
+struct SharedTool(std::sync::Arc<dyn evot_engine::AgentTool>);
+
+pub(crate) fn shared_tool(
+    tool: std::sync::Arc<dyn evot_engine::AgentTool>,
+) -> Box<dyn evot_engine::AgentTool> {
+    Box::new(SharedTool(tool))
+}
+
+#[async_trait::async_trait]
+impl evot_engine::AgentTool for SharedTool {
+    fn name(&self) -> &str {
+        self.0.name()
+    }
+    fn label(&self) -> &str {
+        self.0.label()
+    }
+    fn description(&self) -> &str {
+        self.0.description()
+    }
+    fn parameters_schema(&self) -> serde_json::Value {
+        self.0.parameters_schema()
+    }
+    fn prompt_snippet(&self) -> Option<&str> {
+        self.0.prompt_snippet()
+    }
+    fn prompt_guidelines(&self) -> Vec<&str> {
+        self.0.prompt_guidelines()
+    }
+    fn prefer_over(&self) -> Option<(&str, &str)> {
+        self.0.prefer_over()
+    }
+    fn parameter_aliases(&self) -> Option<evot_engine::tools::validation::AliasMap> {
+        self.0.parameter_aliases()
+    }
+    fn prepare_arguments(&self, args: &serde_json::Value) -> serde_json::Value {
+        self.0.prepare_arguments(args)
+    }
+    fn preview_command(&self, params: &serde_json::Value) -> Option<String> {
+        self.0.preview_command(params)
+    }
+    fn name_aliases(&self) -> Vec<(String, String)> {
+        self.0.name_aliases()
+    }
+    fn ends_turn(&self) -> bool {
+        self.0.ends_turn()
+    }
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        ctx: evot_engine::ToolContext,
+    ) -> Result<evot_engine::ToolResult, evot_engine::ToolError> {
+        self.0.execute(params, ctx).await
+    }
+}

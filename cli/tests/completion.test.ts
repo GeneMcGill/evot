@@ -10,6 +10,12 @@ describe('slash command completion', () => {
     expect(result!.wordStart).toBe(0)
   })
 
+  test('completes uppercase input the same way', () => {
+    const result = complete('/HE', 3)
+    expect(result).not.toBeNull()
+    expect(result!.replacement).toBe('/help ')
+  })
+
   test('completes common prefix for multiple matches', () => {
     // /e matches /exit and /env — should show both candidates
     const result = complete('/e', 2)
@@ -181,7 +187,8 @@ describe('ghost hints', () => {
     // Typing an alias must feel like typing the real name: same description on
     // the name, same argument hints after the space.
     expect(getGhostHint('/sessions', 9)).toContain('<id>')
-    expect(getGhostHint('/sessions ', 10)).toContain('<query>')
+    expect(getGhostHint('/sessions ', 10)).toContain('<request>')
+    expect(getGhostHint('/SESSIONS ', 10)).toContain('<request>')
   })
 })
 

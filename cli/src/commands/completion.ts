@@ -9,14 +9,14 @@ import { ALL_COMMANDS, COMMANDS, type SlashCommand } from './index.js'
 
 /**
  * Returns true when text looks like a hand-typed slash command prefix:
- * `/` followed by zero or more ASCII lowercase letters.
- * Pasted paths like `/some/path.rs` are rejected.
+ * `/` followed by zero or more ASCII letters (any case, so `/NEW` with caps
+ * lock still completes). Pasted paths like `/some/path.rs` are rejected.
  */
 function isSlashPrefix(text: string): boolean {
   if (!text.startsWith('/')) return false
   const rest = text.slice(1)
   const cmdPart = rest.split(/\s/)[0] ?? ''
-  return /^[a-z]*$/.test(cmdPart)
+  return /^[a-zA-Z]*$/.test(cmdPart)
 }
 
 export interface CompletionResult {
@@ -163,8 +163,8 @@ const SUB_COMMANDS: Record<string, string[]> = {
   '/skill': ['install', 'list', 'update', 'remove'],
   '/env': ['list', 'get', 'set', 'del', 'load'],
   '/log': ['shot', 'query'],
-  '/resume': ['<id>', '<query>'],
-  '/sessions': ['<id>', '<query>'],
+  '/resume': ['<id>', '<request>'],
+  '/sessions': ['<id>', '<request>'],
   '/fork': ['<title>'],
   '/back': ['<levels>'],
   '/model': ['<name>'],

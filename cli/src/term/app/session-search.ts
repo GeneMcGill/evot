@@ -1,8 +1,9 @@
 /**
  * `/sessions <query>` on the TUI side.
  *
- * The search itself is an ordinary agent turn: the app prepares compact
- * session evidence and loads the session-search skill for semantic ranking.
+ * The search itself is an ordinary agent turn: the app loads the
+ * session-search skill and attaches the run-scoped `session_search` tool; the
+ * model reads the time range from the request and pages through the archive.
  * This module only reads the answer back — the `- <id> — …` lines —
  * so the REPL can open the resume selector on what the agent found.
  */

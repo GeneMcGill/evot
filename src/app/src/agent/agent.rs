@@ -491,12 +491,10 @@ impl Agent {
         // `/clip all` and `/sessions <query>` become prepared prompts and
         // continue as a normal run.
         let skills_dirs = self.assembler.skills_dirs.read().clone();
-        let llm = request.llm.clone().unwrap_or_else(|| self.llm());
         let request = expand_prompt_command(request, &PromptCommandContext {
             skills_dirs: &skills_dirs,
-            storage: self.storage.as_ref(),
+            storage: self.storage.clone(),
             session: &session,
-            llm: &llm,
         })
         .await?;
 
@@ -668,6 +666,7 @@ impl Agent {
             llm,
             previous_llm: self.selection.previous_llm(),
             host_tools: request.host_tools.clone(),
+            extra_tools: request.extra_tools.clone(),
         });
 
         let run = runtime::execute_run(runtime::ExecuteRunArgs {
@@ -902,6 +901,7 @@ impl Agent {
                 TurnBuildRequest {
                     input: Vec::new(),
                     host_tools: None,
+                    extra_tools: Vec::new(),
                     consume_process_notifications: false,
                     previous_llm: None,
                 },

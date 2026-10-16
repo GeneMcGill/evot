@@ -2,9 +2,10 @@ use chrono::DateTime;
 use chrono::Utc;
 use evot::agent::prompt::skill::load_skill;
 use evot::agent::prompt::skill::load_skill_instructions;
-use evot::search::SessionCandidates;
 use evot::search::SessionDigest;
-use evot::search::SessionSearch;
+use evot::search::SessionSearchTool;
+use evot::search::MAX_CALLS_PER_RUN;
+use evot::search::PAGE_CHARS;
 use evot::storage::MemoryStorage;
 use evot::storage::Storage;
 use evot::types::AssistantBlock;
@@ -242,20 +243,19 @@ async fn save(
     Ok(())
 }
 
-#[tokio::test]
-async fn sessions_command_loads_builtin_and_prepares_evidence_in_one_turn() -> TestResult {
-    use std::sync::Arc;
+fn now() -> Result<DateTime<Utc>, chrono::ParseError> {
+    Ok(DateTime::parse_from_rfc3339("2026-03-10T00:00:00Z")?.with_timezone(&Utc))
+}
 
-    use evot::agent::Agent;
-    use evot::agent::QueryRequest;
-    use evot::agent::SubmitOutcome;
+fn cancel() -> tokio_util::sync::CancellationToken {
+    tokio_util::sync::CancellationToken::new()
+}
+
+fn test_config(root: &std::path::Path) -> evot::conf::Config {
     use evot::conf::Config;
     use evot::conf::Protocol;
     use evot::conf::ProviderProfile;
-    use evot_engine::provider::MockProvider;
-
-    let tmp = tempfile::tempdir()?;
-    let mut config = Config::new(tmp.path().into());
+    let mut config = Config::new(root.into());
     config.providers.insert("test".into(), ProviderProfile {
         protocol: Protocol::OpenAi,
         api_key: "test-key".into(),
@@ -269,6 +269,22 @@ async fn sessions_command_loads_builtin_and_prepares_evidence_in_one_turn() -> T
         supports_image: None,
     });
     config.llm.provider = "test".into();
+    config
+}
+
+#[tokio::test]
+async fn sessions_command_attaches_the_tool_and_the_model_drives_the_scan() -> TestResult {
+    use std::sync::Arc;
+
+    use evot::agent::Agent;
+    use evot::agent::QueryRequest;
+    use evot::agent::SubmitOutcome;
+    use evot_engine::provider::MockProvider;
+    use evot_engine::provider::MockResponse;
+    use evot_engine::provider::MockToolCall;
+
+    let tmp = tempfile::tempdir()?;
+    let config = test_config(tmp.path());
     let storage = Arc::new(MemoryStorage::new());
     let past_id = "018f0000-0000-7000-8000-000000000001";
     save(
@@ -281,8 +297,23 @@ async fn sessions_command_loads_builtin_and_prepares_evidence_in_one_turn() -> T
         ],
     )
     .await?;
-    let agent = Agent::new_with_provider_for_test(&config, tmp.path().to_string_lossy(), storage,
-        MockProvider::text(format!("Found a relevant session.\n- {past_id} — Memory pressure — 2026-03-09 — Diagnosed warehouse restarts")))?;
+    let provider = MockProvider::new(vec![
+        MockResponse::ToolCalls(vec![MockToolCall {
+            name: "session_search".into(),
+            arguments: serde_json::json!({
+                "keywords": ["warehouse", "restart"],
+            }),
+        }]),
+        MockResponse::Text(format!(
+            "Found a relevant session.\n- {past_id} — Memory pressure — 2026-03-09 — Diagnosed warehouse restarts"
+        )),
+    ]);
+    let agent = Agent::new_with_provider_for_test(
+        &config,
+        tmp.path().to_string_lossy(),
+        storage,
+        provider,
+    )?;
     let current = agent.create_session("test").await?;
     let session = agent
         .load_session(&current.session_id)
@@ -290,7 +321,7 @@ async fn sessions_command_loads_builtin_and_prepares_evidence_in_one_turn() -> T
         .ok_or("missing session")?;
     let outcome = agent
         .submit_to_session(
-            QueryRequest::text("/sessions --all why nodes crash"),
+            QueryRequest::text("/sessions 最近半个月 warehouse 为什么重启"),
             session,
         )
         .await?;
@@ -309,123 +340,270 @@ async fn sessions_command_loads_builtin_and_prepares_evidence_in_one_turn() -> T
             _ => None,
         })
         .ok_or("missing prepared prompt")?;
+    // The prompt carries instructions and the raw request, not evidence.
     assert!(prompt.contains("# Session search"));
-    assert!(prompt.contains("why nodes crash"));
-    assert!(prompt.contains("Diagnose warehouse memory pressure"));
-    assert!(prompt.contains("Confirmed insufficient memory"));
-    assert!(prompt.contains("\"included\":1"));
-    assert!(prompt.contains(past_id));
-    assert!(!transcript
+    assert!(prompt.contains("最近半个月 warehouse 为什么重启"));
+    assert!(prompt.contains("Current UTC time:"));
+    assert!(!prompt.contains("Diagnose warehouse memory pressure"));
+    // Evidence arrives through the tool the model called.
+    let tool_result = transcript
         .iter()
-        .any(|item| matches!(item, TranscriptItem::ToolResult { .. })));
+        .find_map(|item| match item {
+            TranscriptItem::ToolResult { content, .. } => Some(content),
+            _ => None,
+        })
+        .ok_or("model should have called session_search")?;
+    assert!(tool_result.contains("Diagnose warehouse memory pressure"));
+    assert!(tool_result.contains("Confirmed insufficient memory"));
+    assert!(tool_result.contains("\"since_days\":null"));
+    assert!(tool_result.contains("\"matched_keywords\":[\"warehouse\",\"restart\"]"));
+    assert!(tool_result.contains(past_id));
     Ok(())
 }
 
-fn now() -> Result<DateTime<Utc>, chrono::ParseError> {
-    Ok(DateTime::parse_from_rfc3339("2026-03-10T00:00:00Z")?.with_timezone(&Utc))
+#[tokio::test]
+async fn ordinary_turns_do_not_expose_session_search() -> TestResult {
+    use std::sync::Arc;
+
+    use evot::agent::Agent;
+    use evot::agent::QueryRequest;
+    use evot::agent::SubmitOutcome;
+    use evot_engine::provider::MockProvider;
+    use evot_engine::provider::MockResponse;
+    use evot_engine::provider::MockToolCall;
+
+    let tmp = tempfile::tempdir()?;
+    let config = test_config(tmp.path());
+    let provider = MockProvider::new(vec![
+        MockResponse::ToolCalls(vec![MockToolCall {
+            name: "session_search".into(),
+            arguments: serde_json::json!({}),
+        }]),
+        MockResponse::Text("done".into()),
+    ]);
+    let agent = Agent::new_with_provider_for_test(
+        &config,
+        tmp.path().to_string_lossy(),
+        Arc::new(MemoryStorage::new()),
+        provider,
+    )?;
+    let current = agent.create_session("test").await?;
+    let session = agent
+        .load_session(&current.session_id)
+        .await?
+        .ok_or("missing session")?;
+    let outcome = agent
+        .submit_to_session(QueryRequest::text("hello"), session)
+        .await?;
+    let mut run = match outcome {
+        SubmitOutcome::Run(run) => run,
+        SubmitOutcome::Command(message) => {
+            return Err(format!("unexpected command: {message}").into())
+        }
+    };
+    while run.next().await.is_some() {}
+    let transcript = agent.sessions().transcript(&current.session_id).await?;
+    let tool_result = transcript
+        .iter()
+        .find_map(|item| match item {
+            TranscriptItem::ToolResult { content, .. } => Some(content),
+            _ => None,
+        })
+        .ok_or("the unknown tool call should still produce a result")?;
+    assert!(
+        tool_result.to_lowercase().contains("not found"),
+        "{tool_result}"
+    );
+    Ok(())
 }
 
 #[tokio::test]
-async fn candidates_filter_window_automation_current_and_empty_not_keywords() -> TestResult {
-    let storage = MemoryStorage::new();
-    save(&storage, meta("recent", "2026-03-09T00:00:00Z"), vec![
-        user("Totally different wording"),
-    ])
-    .await?;
-    save(&storage, meta("boundary", "2026-03-03T00:00:00Z"), vec![
-        user("Other project"),
-    ])
-    .await?;
-    save(&storage, meta("old", "2026-03-02T00:00:00Z"), vec![user(
-        "query keyword",
-    )])
-    .await?;
-    save(&storage, meta("current", "2026-03-09T00:00:00Z"), vec![
-        user("Current query"),
-    ])
-    .await?;
-    save(&storage, meta("empty", "2026-03-09T00:00:00Z"), vec![]).await?;
+async fn page_filters_window_automation_current_and_empty_without_keywords() -> TestResult {
+    let storage = std::sync::Arc::new(MemoryStorage::new());
     save(
-        &storage,
+        storage.as_ref(),
+        meta("recent", "2026-03-09T00:00:00Z"),
+        vec![user("Totally different wording")],
+    )
+    .await?;
+    save(
+        storage.as_ref(),
+        meta("boundary", "2026-03-03T00:00:00Z"),
+        vec![user("Other project")],
+    )
+    .await?;
+    save(storage.as_ref(), meta("old", "2026-03-02T00:00:00Z"), vec![
+        user("query keyword"),
+    ])
+    .await?;
+    save(
+        storage.as_ref(),
+        meta("current", "2026-03-09T00:00:00Z"),
+        vec![user("Current query")],
+    )
+    .await?;
+    save(
+        storage.as_ref(),
+        meta("empty", "2026-03-09T00:00:00Z"),
+        vec![],
+    )
+    .await?;
+    save(
+        storage.as_ref(),
         meta("automated", "2026-03-09T00:00:00Z").with_source("automation"),
         vec![user("Background task")],
     )
     .await?;
-    let search = SessionSearch {
-        query: "query keyword".into(),
-        window_days: Some(7),
-    };
-    let candidates =
-        SessionCandidates::collect(&storage, &search, now()?, "current", 100_000).await?;
-    assert_eq!(candidates.sessions_in_window, 3);
-    assert_eq!(candidates.excluded_empty, 1);
-    assert_eq!(candidates.included, 2);
-    assert_eq!(candidates.sessions[0].session_id, "recent");
-    assert_eq!(candidates.sessions[1].session_id, "boundary");
-    assert_eq!(candidates.not_included, 0);
-    let all = SessionSearch {
-        window_days: None,
-        ..search
-    };
+    let tool = SessionSearchTool::new(storage, "current");
+    let page = tool.page(Some(7), &[], 0, 20, now()?, &cancel()).await?;
+    assert_eq!(page.sessions_in_window, 3);
+    assert_eq!(page.excluded_empty, 1);
+    assert_eq!(page.returned, 2);
+    assert_eq!(page.remaining, 0);
+    assert!(page.next_cursor.is_none());
+    assert_eq!(page.sessions[0].digest.session_id, "recent");
+    assert_eq!(page.sessions[1].digest.session_id, "boundary");
     assert_eq!(
-        SessionCandidates::collect(&storage, &all, now()?, "current", 100_000)
-            .await?
-            .included,
-        3
+        page.oldest_in_window.as_deref(),
+        Some("2026-03-03T00:00:00Z")
     );
-    Ok(())
-}
-
-#[tokio::test]
-async fn candidates_budget_reports_partial_coverage_without_dropping_recent_for_old() -> TestResult
-{
-    let storage = MemoryStorage::new();
-    for (id, date) in [
-        ("recent", "2026-03-09T00:00:00Z"),
-        ("older", "2026-03-08T00:00:00Z"),
-        ("oldest", "2026-03-07T00:00:00Z"),
-    ] {
-        save(&storage, meta(id, date), vec![
-            user(&"中".repeat(400)),
-            assistant(&"文".repeat(400)),
-        ])
-        .await?;
-    }
-    let search = SessionSearch {
-        query: "semantic intent".into(),
-        window_days: None,
-    };
-    let candidates =
-        SessionCandidates::collect(&storage, &search, now()?, "current", 1_900).await?;
-    assert_eq!(candidates.included, 1);
-    assert_eq!(candidates.not_included, 2);
-    assert_eq!(candidates.sessions[0].session_id, "recent");
     assert_eq!(
-        candidates.oldest_included.as_deref(),
+        page.newest_in_window.as_deref(),
         Some("2026-03-09T00:00:00Z")
     );
-    assert_eq!(candidates.newest_included, candidates.oldest_included);
-    let none = SessionCandidates::collect(&storage, &search, now()?, "current", 0).await?;
-    assert_eq!(none.included, 0);
-    assert_eq!(none.not_included, 3);
-    assert!(none.oldest_included.is_none());
+    let all = tool.page(None, &[], 0, 20, now()?, &cancel()).await?;
+    assert_eq!(all.returned, 3);
+    assert_eq!(all.sessions[2].digest.session_id, "old");
     Ok(())
 }
 
 #[tokio::test]
-async fn candidates_report_corrupt_transcripts_without_failing_other_sessions() -> TestResult {
+async fn page_ranks_keyword_hits_first_then_newest_without_filtering() -> TestResult {
+    let storage = std::sync::Arc::new(MemoryStorage::new());
+    save(
+        storage.as_ref(),
+        meta("newest-miss", "2026-03-09T00:00:00Z"),
+        vec![user("Unrelated work")],
+    )
+    .await?;
+    save(
+        storage.as_ref(),
+        meta("title-hit", "2026-03-08T00:00:00Z"),
+        vec![user("Set up the campaign")],
+    )
+    .await?;
+    storage.rename_session("title-hit", "小红书 发帖").await?;
+    save(
+        storage.as_ref(),
+        meta("double-hit", "2026-03-06T00:00:00Z"),
+        vec![user("Post to XiaoHongShu"), assistant("Published on xhs")],
+    )
+    .await?;
+    save(
+        storage.as_ref(),
+        meta("oldest-miss", "2026-03-05T00:00:00Z"),
+        vec![user("Nothing here")],
+    )
+    .await?;
+    let tool = SessionSearchTool::new(storage, "current");
+    let keywords = vec![
+        "小红书".to_string(),
+        "xiaohongshu".into(),
+        " XHS ".into(),
+        "".into(),
+    ];
+    let page = tool.page(None, &keywords, 0, 20, now()?, &cancel()).await?;
+    let ids: Vec<&str> = page
+        .sessions
+        .iter()
+        .map(|item| item.digest.session_id.as_str())
+        .collect();
+    assert_eq!(ids, [
+        "double-hit",
+        "title-hit",
+        "newest-miss",
+        "oldest-miss"
+    ]);
+    assert_eq!(page.keyword_hits, 2);
+    assert_eq!(page.keywords, ["小红书", "xiaohongshu", "xhs"]);
+    assert_eq!(page.sessions[0].matched_keywords, ["xiaohongshu", "xhs"]);
+    assert_eq!(page.sessions[1].matched_keywords, ["小红书"]);
+    assert!(page.sessions[2].matched_keywords.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn page_cursor_walks_the_ranked_list_in_bounded_chunks() -> TestResult {
+    let storage = std::sync::Arc::new(MemoryStorage::new());
+    for index in 0..7 {
+        save(
+            storage.as_ref(),
+            meta(
+                &format!("session-{index}"),
+                &format!("2026-03-0{}T00:00:00Z", 9 - index),
+            ),
+            vec![user(&format!("Request {index}"))],
+        )
+        .await?;
+    }
+    let tool = SessionSearchTool::new(storage, "current");
+    let first = tool.page(None, &[], 0, 3, now()?, &cancel()).await?;
+    assert_eq!(first.returned, 3);
+    assert_eq!(first.remaining, 4);
+    assert_eq!(first.next_cursor, Some(3));
+    assert_eq!(first.sessions[0].digest.session_id, "session-0");
+    let second = tool.page(None, &[], 3, 3, now()?, &cancel()).await?;
+    assert_eq!(second.sessions[0].digest.session_id, "session-3");
+    assert_eq!(second.remaining, 1);
+    assert_eq!(second.next_cursor, Some(6));
+    let last = tool.page(None, &[], 6, 3, now()?, &cancel()).await?;
+    assert_eq!(last.returned, 1);
+    assert_eq!(last.remaining, 0);
+    assert!(last.next_cursor.is_none());
+    let past_end = tool.page(None, &[], 99, 3, now()?, &cancel()).await?;
+    assert_eq!(past_end.returned, 0);
+    assert_eq!(past_end.remaining, 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn page_size_is_bounded_by_characters_but_never_empty() -> TestResult {
+    let storage = std::sync::Arc::new(MemoryStorage::new());
+    for index in 0..60 {
+        save(
+            storage.as_ref(),
+            meta(&format!("session-{index:03}"), "2026-03-09T00:00:00Z"),
+            (0..20).map(|_| user(&"中".repeat(400))).collect(),
+        )
+        .await?;
+    }
+    let tool = SessionSearchTool::new(storage, "current");
+    let page = tool.page(None, &[], 0, 40, now()?, &cancel()).await?;
+    assert!(page.returned > 0);
+    assert!(page.returned < 40);
+    assert_eq!(page.returned + page.remaining, 60);
+    assert!(serde_json::to_string(&page)?.chars().count() <= PAGE_CHARS + 1_000);
+    Ok(())
+}
+
+#[tokio::test]
+async fn page_reports_corrupt_transcripts_without_failing_other_sessions() -> TestResult {
     use evot::storage::fs::FsStorage;
     let root = tempfile::tempdir()?;
-    let storage = FsStorage::new(root.path().into());
+    let storage = std::sync::Arc::new(FsStorage::new(root.path().into()));
     let healthy = "018f0000-0000-7000-8000-000000000001";
     let corrupt = "018f0000-0000-7000-8000-000000000002";
-    save(&storage, meta(healthy, "2026-03-09T00:00:00Z"), vec![user(
-        "Healthy session",
-    )])
+    save(
+        storage.as_ref(),
+        meta(healthy, "2026-03-09T00:00:00Z"),
+        vec![user("Healthy session")],
+    )
     .await?;
-    save(&storage, meta(corrupt, "2026-03-09T00:00:00Z"), vec![user(
-        "Corrupt session",
-    )])
+    save(
+        storage.as_ref(),
+        meta(corrupt, "2026-03-09T00:00:00Z"),
+        vec![user("Corrupt session")],
+    )
     .await?;
     std::fs::write(
         root.path()
@@ -434,62 +612,71 @@ async fn candidates_report_corrupt_transcripts_without_failing_other_sessions() 
             .join("transcript.jsonl"),
         b"corrupt data\n",
     )?;
-    let search = SessionSearch {
-        query: "a topic".into(),
-        window_days: None,
-    };
-    let candidates =
-        SessionCandidates::collect(&storage, &search, now()?, "current", 100_000).await?;
-    assert_eq!(candidates.included, 1);
-    assert_eq!(candidates.unreadable, 1);
-    assert_eq!(candidates.not_included, 0);
-    assert_eq!(candidates.sessions[0].session_id, healthy);
+    let tool = SessionSearchTool::new(storage, "current");
+    let page = tool.page(None, &[], 0, 20, now()?, &cancel()).await?;
+    assert_eq!(page.returned, 1);
+    assert_eq!(page.unreadable, 1);
+    assert_eq!(page.sessions[0].digest.session_id, healthy);
     Ok(())
 }
 
 #[tokio::test]
-async fn candidates_reject_overflowing_time_windows() -> TestResult {
-    let search = SessionSearch {
-        query: "a topic".into(),
-        window_days: Some(u32::MAX),
-    };
-    let error =
-        SessionCandidates::collect(&MemoryStorage::new(), &search, now()?, "current", 100_000)
-            .await
-            .err()
-            .ok_or("expected an invalid window error")?;
+async fn page_rejects_overflowing_time_windows() -> TestResult {
+    let tool = SessionSearchTool::new(std::sync::Arc::new(MemoryStorage::new()), "current");
+    let error = tool
+        .page(Some(u32::MAX), &[], 0, 20, now()?, &cancel())
+        .await
+        .err()
+        .ok_or("expected an invalid window error")?;
     assert!(error.to_string().contains("window is too large"));
     Ok(())
 }
 
 #[tokio::test]
-async fn candidates_character_budget_and_skill_prompt_contract() -> TestResult {
-    let storage = MemoryStorage::new();
-    for index in 0..60 {
-        save(
-            &storage,
-            meta(&format!("session-{index:03}"), "2026-03-09T00:00:00Z"),
-            (0..20).map(|_| user(&"x".repeat(400))).collect(),
-        )
-        .await?;
-    }
-    let search = SessionSearch {
-        query: "a query\nwith \"quotes\"".into(),
-        window_days: None,
+async fn execute_validates_arguments_and_caps_calls_per_run() -> TestResult {
+    use evot_engine::AgentTool;
+    let storage = std::sync::Arc::new(MemoryStorage::new());
+    save(storage.as_ref(), meta("one", "2026-03-09T00:00:00Z"), vec![
+        user("Something"),
+    ])
+    .await?;
+    let tool = SessionSearchTool::new(storage, "current");
+    let ctx = || evot_engine::ToolContext {
+        tool_call_id: "call".into(),
+        tool_name: "session_search".into(),
+        cancel: cancel(),
+        on_update: None,
+        on_progress: None,
+        cwd: std::env::temp_dir(),
+        path_guard: std::sync::Arc::new(evot_engine::PathGuard::open()),
+        spill: None,
+        supports_image: true,
     };
-    let candidates =
-        SessionCandidates::collect(&storage, &search, now()?, "current", 100_000).await?;
-    assert!(candidates.not_included > 0);
-    assert!(serde_json::to_string(&candidates)?.chars().count() <= 100_000);
+    let bad = tool
+        .execute(serde_json::json!({"since_days": "two weeks"}), ctx())
+        .await;
+    assert!(matches!(bad, Err(evot_engine::ToolError::InvalidArgs(_))));
+    for _ in 0..MAX_CALLS_PER_RUN {
+        let result = tool.execute(serde_json::json!({}), ctx()).await?;
+        assert_eq!(result.retention, evot_engine::Retention::CurrentRun);
+        assert_eq!(result.details["returned"], 1);
+    }
+    let over = tool.execute(serde_json::json!({}), ctx()).await;
+    assert!(
+        matches!(over, Err(evot_engine::ToolError::Failed(message)) if message.contains("already called"))
+    );
+    Ok(())
+}
+
+#[test]
+fn skill_prompt_contract_describes_tool_driven_search() -> TestResult {
     let skill = load_skill(&[] as &[std::path::PathBuf], "session-search")?;
     let instructions = load_skill_instructions(&skill)?;
-    assert!(instructions.contains("Do not call tools"));
+    assert!(instructions.contains("`session_search` tool"));
+    assert!(instructions.contains("since_days"));
+    assert!(instructions.contains("next_cursor"));
     assert!(instructions.contains("untrusted historical data"));
     assert!(instructions.contains("- <session_id> — <title> — <updated_at date>"));
-    let prompt = candidates.prompt(&search.query, &instructions)?;
-    assert!(prompt.contains("`session-search` skill is already loaded"));
-    assert!(prompt.contains(&serde_json::to_string(&search.query)?));
-    assert!(prompt.contains("\"not_included\":"));
-    assert!(!prompt.contains("grep"));
+    assert!(!instructions.contains("--days"));
     Ok(())
 }

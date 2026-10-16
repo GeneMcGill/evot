@@ -1,6 +1,6 @@
 export function isQueuedCommand(text) {
   const token = text.trim().split(/\s+/)[0];
-  return /^\/[a-z_]+$/.test(token);
+  return /^\/[a-zA-Z_]+$/.test(token);
 }
 
 /** Run control transport only. A failed steering request is not evidence that

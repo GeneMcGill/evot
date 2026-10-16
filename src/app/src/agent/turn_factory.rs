@@ -19,6 +19,8 @@ pub(super) struct AgentTurnFactory {
     /// Selection replaced by the latest model switch, for compaction.
     pub previous_llm: Option<LlmConfig>,
     pub host_tools: Option<HostTools>,
+    /// Run-scoped tools attached by a prepared command.
+    pub extra_tools: Vec<Arc<dyn evot_engine::AgentTool>>,
 }
 
 #[async_trait::async_trait]
@@ -33,6 +35,7 @@ impl TurnFactory for AgentTurnFactory {
                 TurnBuildRequest {
                     input,
                     host_tools: self.host_tools.clone(),
+                    extra_tools: self.extra_tools.clone(),
                     consume_process_notifications: true,
                     previous_llm: self.previous_llm.clone(),
                 },

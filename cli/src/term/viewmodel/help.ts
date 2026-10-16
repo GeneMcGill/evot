@@ -30,7 +30,7 @@ const KEYS: Entry[] = [
 const COMMANDS: Entry[] = [
   ['/help', 'Show this help'],
   ['/model <name>', 'Switch model'],
-  ['/resume, /sessions', 'Resume session'],
+  ['/resume, /sessions', 'Resume session or find one by description'],
   ['/new', 'Start new session'],
   ['/plan', 'Toggle planning mode'],
   ['/compact', 'Compact session context'],

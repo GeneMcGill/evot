@@ -13,6 +13,13 @@ describe('isSlashCommand', () => {
     expect(isSlashCommand('/model gpt-4')).toBe(true)
   })
 
+  test('ignores case so caps lock does not send the command to the model', () => {
+    expect(isSlashCommand('/NEW')).toBe(true)
+    expect(isSlashCommand('/Resume abc')).toBe(true)
+    expect(resolveCommand('/NEW')).toEqual({ kind: 'resolved', name: '/new', args: '' })
+    expect(resolveCommand('/SESSIONS 小红书')).toEqual({ kind: 'resolved', name: '/resume', args: '小红书' })
+  })
+
   test('rejects non-commands', () => {
     expect(isSlashCommand('hello')).toBe(false)
     expect(isSlashCommand('')).toBe(false)

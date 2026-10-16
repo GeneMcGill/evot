@@ -20,6 +20,7 @@ pub use error::new_client as http_client;
 pub use error::ProviderError;
 pub use mock::MockProvider;
 pub use mock::MockResponse;
+pub use mock::MockToolCall;
 pub(crate) use model::thinking;
 pub(crate) use model::thinking::effective_thinking_level;
 pub use model::InputModality;

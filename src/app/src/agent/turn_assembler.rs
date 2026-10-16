@@ -36,6 +36,8 @@ use crate::sessions::Session;
 pub struct TurnBuildRequest {
     pub input: Vec<evot_engine::Content>,
     pub host_tools: Option<HostTools>,
+    /// Run-scoped tools from a prepared command, appended after the mode's set.
+    pub extra_tools: Vec<Arc<dyn evot_engine::AgentTool>>,
     /// Dump/inspection callers must not drain pending process results.
     pub consume_process_notifications: bool,
     /// Selection replaced by the latest model switch, if any.
@@ -137,6 +139,7 @@ impl TurnAssembler {
         let TurnBuildRequest {
             mut input,
             host_tools,
+            extra_tools,
             consume_process_notifications,
             previous_llm,
         } = request;
@@ -188,7 +191,7 @@ impl TurnAssembler {
         } else {
             None
         };
-        let tools = build_tools(
+        let mut tools = build_tools(
             policy,
             envs,
             sandbox_rt.allow_bash,
@@ -196,6 +199,7 @@ impl TurnAssembler {
             process_manager.clone(),
             host_tools,
         );
+        tools.extend(extra_tools.into_iter().map(super::tools::shared_tool));
         let (mut system_prompt, mut sections) = self.build_system_prompt(mode, &cwd);
         if let Some(section) = skills_prompt_section(&skills) {
             let insert_at = sections

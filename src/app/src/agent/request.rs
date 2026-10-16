@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use super::tools::HostTools;
 use super::tools::ToolMode;
@@ -32,6 +33,9 @@ pub struct QueryRequest {
     pub llm: Option<LlmConfig>,
     pub host_tools: Option<HostTools>,
     pub cwd: Option<String>,
+    /// Tools scoped to this run only, added by a prepared command (e.g.
+    /// `/sessions` attaches `session_search`). Never part of ordinary turns.
+    pub extra_tools: Vec<Arc<dyn evot_engine::AgentTool>>,
 }
 
 impl QueryRequest {
@@ -46,6 +50,7 @@ impl QueryRequest {
             llm: None,
             host_tools: None,
             cwd: None,
+            extra_tools: Vec::new(),
         }
     }
 
@@ -58,6 +63,7 @@ impl QueryRequest {
             llm: None,
             host_tools: None,
             cwd: None,
+            extra_tools: Vec::new(),
         }
     }
 
@@ -104,9 +110,8 @@ pub enum SubmitOutcome {
 /// Commands that run as an ordinary agent turn with a prepared prompt.
 pub(super) struct PromptCommandContext<'a> {
     pub skills_dirs: &'a [PathBuf],
-    pub storage: &'a dyn crate::storage::Storage,
+    pub storage: Arc<dyn crate::storage::Storage>,
     pub session: &'a crate::sessions::Session,
-    pub llm: &'a LlmConfig,
 }
 
 pub(super) async fn expand_prompt_command(
@@ -137,33 +142,37 @@ pub(super) async fn expand_prompt_command(
                     EvotError::Agent(format!("cannot read session-search skill: {error}"))
                 })?;
             let current_session_id = ctx.session.session_id().await;
-            let (history, _, _) = ctx.session.context_snapshot().await;
-            let history_tokens = evot_engine::context::total_tokens(&history)
-                .max(ctx.session.meta().await.context_tokens);
-            let window = ctx.llm.model_config.context_window() as usize;
-            // Reserve output and system/tools/skill overhead; search evidence
-            // must not dominate the model window even in an empty conversation.
-            let budget = window
-                .saturating_sub(history_tokens)
-                .saturating_sub((ctx.llm.model_config.max_tokens() as usize).min(8_192))
-                .saturating_sub(8_192)
-                .min(window / 2);
-            let candidates = crate::search::SessionCandidates::collect(
-                ctx.storage,
-                &search,
-                chrono::Utc::now(),
-                &current_session_id,
-                budget,
-            )
-            .await?;
+            request
+                .extra_tools
+                .push(Arc::new(crate::search::SessionSearchTool::new(
+                    ctx.storage.clone(),
+                    current_session_id,
+                )));
             command_prompt(
                 "sessions",
                 &input_text,
-                &candidates.prompt(&search.query, &instructions)?,
+                &session_search_prompt(&search.query, &instructions, chrono::Utc::now())?,
             )
         }
         _ => return Ok(request),
     };
     request.input = vec![evot_engine::Content::Text { text }];
     Ok(request)
+}
+
+/// The `/sessions` prompt: skill instructions plus the raw request and
+/// today's date, so the model can turn "最近半个月" into a day count itself.
+fn session_search_prompt(
+    query: &str,
+    instructions: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<String> {
+    // JSON separates arbitrary user text from workflow instructions.
+    let query = serde_json::to_string(query)?;
+    Ok(format!(
+        "The `session-search` skill is already loaded and the `session_search` tool is \
+         available for this request only. Follow the skill instructions below.\n\n\
+         {instructions}\n\nCurrent UTC time: {}\n\nSearch request (JSON string): {query}",
+        now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+    ))
 }
