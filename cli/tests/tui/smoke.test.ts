@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { smokeEnvironment, seedSmokeHome } from '../helpers/smoke-home.js'
-import { suggestionRequestContext } from '../helpers/suggestion-request.js'
+import { suggestionInstructions } from '../helpers/suggestion-request.js'
 import { getTheme } from '../../src/render/theme/index.js'
 import { ScreenHarness } from '../helpers/screen.js'
 
@@ -169,6 +169,19 @@ function seedSuggestionService(stateHome: string, baseUrl: string): void {
       api_key: 'fixture-key', context_window: 8192,
     } } },
   }))
+}
+
+function seedCompletedSuggestionHistory(home: string): void {
+  const path = join(home, 'sessions', SEEDED_SESSION_ID, 'transcript.jsonl')
+  const entries = JSON.parse(readFileSync(path, 'utf8').trim()) as Record<string, unknown>[]
+  const items = [
+    { type: 'assistant', content: [{ type: 'text', text: 'Implementation is ready.' }], model: 'test-model', provider: 'test-provider', usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, total_tokens: 0 },  stop_reason: 'stop' },
+    { type: 'user', text: 'Add the login tests', content: [] },
+    { type: 'assistant', content: [{ type: 'text', text: 'The login tests are ready.' }], model: 'test-model', provider: 'test-provider', usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, total_tokens: 0 },  stop_reason: 'stop' },
+  ]
+  for (const [index, item] of items.entries()) entries.push({ session_id: SEEDED_SESSION_ID, run_id: null,
+    seq: index + 2, turn: index + 2, item, created_at: new Date().toISOString() })
+  writeFileSync(path, `${JSON.stringify(entries)}\n`)
 }
 
 async function startEvot(
@@ -699,6 +712,9 @@ describe.skipIf(!canRun)('evot binary smoke (PTY)', () => {
       session = await startEvot(false, false, false, baseUrl, stateHome => seedSuggestionService(stateHome, baseUrl))
       session.write('Implement the requested change\x0d')
       await session.waitFor('The implementation is ready.')
+      await session.waitForScreen(/Enter a coding task/)
+      expect(suggestionRequests).toBe(0)
+      session.write('Add the targeted tests\x0d')
       await session.waitForScreen(/Run the targeted tests\s+⇥/)
       expect(suggestionRequests).toBe(1)
       const beforeAccept = chatRequests
@@ -711,21 +727,21 @@ describe.skipIf(!canRun)('evot binary smoke (PTY)', () => {
       session.write('\x1b[D\x1b[C!')
       await session.waitForScreen(/Run the targeted tests!/)
       expect(chatRequests).toBe(beforeAccept)
-      expect(session.historyEntries()).toEqual(['Implement the requested change'])
+      expect(session.historyEntries()).toEqual(['Implement the requested change', 'Add the targeted tests'])
     } finally {
       if (session) await session.kill()
       await server.stop(true)
     }
   }, 60_000)
 
-  test('resume and plan transitions sample once with product facts and keep operation guidance visible', async () => {
-    const contexts: { trigger: string; mode: string; actions: { text: string }[] }[] = []
+  test('resume and plan transitions keep product guidance local and model input recent-only', async () => {
+    const contexts: string[] = []
     const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: async request => {
       const body = await request.json() as { model: string; messages: { content: string }[] }
       expect(body.model).toBe('suggestion-fixture')
-      const context = suggestionRequestContext(body).product_context!
-      contexts.push(context)
-      const text = context.mode === 'plan' ? '/done' : 'Continue the login tests'
+      const instruction = suggestionInstructions(body)
+      contexts.push(instruction)
+      const text = contexts.length === 2 ? '/done' : 'Continue the login tests'
       const chunk = { id: 'fixture', model: body.model, choices: [{ index: 0,
         delta: { role: 'assistant', content: text }, finish_reason: 'stop' }] }
       return new Response(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`, { headers: { 'content-type': 'text/event-stream' } })
@@ -733,19 +749,18 @@ describe.skipIf(!canRun)('evot binary smoke (PTY)', () => {
     let session: Session | undefined
     try {
       const base = `http://127.0.0.1:${server.port}/v1`
-      session = await startEvot(true, false, false, base, home => seedSuggestionService(home, base))
+      session = await startEvot(true, false, false, base, home => { seedSuggestionService(home, base); seedCompletedSuggestionHistory(home) })
       session.write(`/resume ${SEEDED_SESSION_ID}\x0d`)
       await session.waitForScreen(/Continue the login tests\s+⇥/)
-      expect(contexts.map(context => context.trigger)).toEqual(['resume'])
+      expect(contexts).toHaveLength(1)
       session.write('/plan\x0d')
       const screen = await session.waitForScreen(/\/done\s+⇥/)
       expect(screen).toContain('no edits')
-      expect(contexts.at(-1)?.mode).toBe('plan')
-      expect(contexts.at(-1)?.actions.some(action => action.text === '/done')).toBe(true)
+      expect(contexts[1]).toBe(contexts[0])
       session.write('/done\x0d')
       await session.waitForScreen(/Continue the login tests\s+⇥/)
-      expect(contexts.map(context => context.trigger)).toEqual(['resume', 'mode_changed', 'mode_changed'])
-      expect(contexts.at(-1)?.mode).toBe('normal')
+      expect(contexts).toHaveLength(3)
+      expect(contexts[2]).toBe(contexts[0])
       session.write('\x1b')
       await session.waitForScreen(/Enter a coding task/)
       expect(contexts).toHaveLength(3)
@@ -760,9 +775,8 @@ describe.skipIf(!canRun)('evot binary smoke (PTY)', () => {
     const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: async request => {
       const body = await request.json() as { model: string; messages: { content: string }[] }
       expect(body.model).toBe('suggestion-fixture')
-      const context = suggestionRequestContext(body)
-      expect(context.product_context?.trigger).toBe('resume')
-      expect(context.original_task).toBe('smoke resume prompt')
+      suggestionInstructions(body)
+      expect(JSON.stringify(body.messages)).not.toContain('smoke resume prompt')
       expect(body.messages.slice(0, -1).every(message => !message.content.includes('smoke resume prompt'))).toBe(true)
       requests++
       const chunk = { id: 'fixture', model: body.model, choices: [{ index: 0,
@@ -778,7 +792,9 @@ describe.skipIf(!canRun)('evot binary smoke (PTY)', () => {
         const original = JSON.parse(readFileSync(path, 'utf8').trim()) as Record<string, unknown>[]
         const followups = Array.from({ length: 100 }, (_, index) => ({
           session_id: SEEDED_SESSION_ID, run_id: null, seq: index + 2, turn: index + 2,
-          item: { type: 'user', text: `Recent refinement ${index}`, content: [] }, created_at: new Date().toISOString(),
+          item: index % 2 === 0 ? { type: 'user', text: `Recent refinement ${index} ${'current task '.repeat(30)}`, content: [] }
+            : { type: 'assistant', content: [{ type: 'text', text: `Completed refinement ${index} ${'current result '.repeat(30)}` }], model: 'test-model', provider: 'test-provider', usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, total_tokens: 0 },  stop_reason: 'stop' },
+          created_at: new Date().toISOString(),
         }))
         writeFileSync(path, `${JSON.stringify([...original, ...followups])}\n`)
       }, ['--resume', SEEDED_SESSION_ID])
@@ -790,7 +806,7 @@ describe.skipIf(!canRun)('evot binary smoke (PTY)', () => {
     }
   }, 60_000)
 
-  test('loop waiting samples once, allows a registered command, and preserves stop guidance', async () => {
+  test('loop waiting with incomplete tool flow keeps local controls without forcing a suggestion', async () => {
     let suggestions = 0
     let foreground = 0
     const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: async request => {
@@ -799,11 +815,8 @@ describe.skipIf(!canRun)('evot binary smoke (PTY)', () => {
       let delta: Record<string, unknown>
       if (suggesting) {
         suggestions++
-        const context = suggestionRequestContext(body).product_context!
-        expect(context.trigger).toBe('loop_waiting')
-        expect(context.state).toBe('waiting-loop')
-        expect(context.actions.some((action: { text: string }) => action.text === '/loop 15m')).toBe(true)
-        delta = { role: 'assistant', content: '/loop 15m' }
+        suggestionInstructions(body)
+        throw new Error('Incomplete loop history must not sample')
       } else {
         foreground++
         delta = { role: 'assistant', content: 'Waiting for the next check.', tool_calls: [{ index: 0, id: 'schedule-1', type: 'function',
@@ -817,13 +830,13 @@ describe.skipIf(!canRun)('evot binary smoke (PTY)', () => {
       const base = `http://127.0.0.1:${server.port}/v1`
       session = await startEvot(false, false, false, base, home => seedSuggestionService(home, base))
       session.write('/loop 15m check the login tests\x0d')
-      const screen = await session.waitForScreen(/\/loop 15m\s+⇥/)
+      const screen = await session.waitForScreen(/Loop waiting/)
       expect(screen).toContain('esc twice to stop')
+      expect(screen).not.toContain('⇥ / →')
       const before = foreground
       session.write('\t')
-      await session.waitForScreen(/^(?![\s\S]*⇥)[\s\S]*\/loop 15m/)
       expect(foreground).toBe(before)
-      expect(suggestions).toBe(1)
+      expect(suggestions).toBe(0)
       expect(session.historyEntries()).toEqual(['/loop 15m check the login tests'])
     } finally {
       if (session) await session.kill()

@@ -74,7 +74,7 @@ export interface NativeAgent {
   addSkillsDirs(dirs: string[]): void
   setSkillNames(names: string[]): void
   skillsDirs(): string[]
-  suggestNextPrompt(contextJson: string, productContextJson?: string | null): NativeSuggestion
+  suggestNextPrompt(contextJson: string): NativeSuggestion
   compact(id: string, instructions: string | null): NativeCompaction
   steer(id: string, text: string, content: string | null): void
   followUp(id: string, text: string): void

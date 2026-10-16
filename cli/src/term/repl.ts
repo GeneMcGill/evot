@@ -99,8 +99,7 @@ import { handleSlashCommand } from './app/commands.js'
 import { askStateToResponse, prefixedAskLines } from './app/ask-user.js'
 import { RunOwnership } from './app/run-ownership.js'
 import { PromptSuggestion, isSuggestionBoundary, suggestionHistoryFromLines } from './app/suggestion.js'
-import { SuggestionGoal } from './app/suggestion-goal.js'
-import { resolveComposerGuidance, suggestionProductContext, allowedSuggestionCommand, type SuggestionTrigger } from './app/composer-guidance.js'
+import { resolveComposerGuidance, allowedSuggestionCommand, type SuggestionTrigger } from './app/composer-guidance.js'
 import {
   composeExtensions,
   dispatchHostToolCall,
@@ -145,7 +144,7 @@ import { ShareSelector } from './app/share-selector.js'
 import { openWebLink } from './open-link.js'
 import { AuthWatcher } from './app/auth-watch.js'
 import { AuthIdentityTracker } from './app/auth-identity.js'
-import { RunInteraction, resolveRunInteraction, type RunInteractionInput } from './app/run-interaction.js'
+import { RunInteraction, type RunInteractionInput } from './app/run-interaction.js'
 import { ManualCompaction } from './app/manual-compaction.js'
 import { busySubmissionAction } from './app/busy-submission.js'
 import { PendingImages } from './app/pending-images.js'
@@ -472,19 +471,12 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
     requestRender: () => renderer.requestRender(),
   }
   let destroyed = false
-  const suggestionGoal = new SuggestionGoal()
   let composerRevision = 0
   let suggestionsReady = false
   let startupSuggestion: SuggestionTrigger | null = null
-  function composerPolicy(trigger?: SuggestionTrigger) {
-    const facts = runInteractionInput()
-    const interaction = runInteraction.snapshot(facts)
-    // Start sampling at the authoritative final-answer boundary, while only
-    // run teardown remains. Reuse the interaction resolver so parked loops
-    // and background tasks keep their real idle-side capabilities.
-    const projected = trigger === 'answer' && interaction.kind === 'active'
-      ? resolveRunInteraction({ ...facts, active: false, loopParked: loopSession.waiting }) : interaction
-    return resolveComposerGuidance({ interaction: projected,
+  function composerPolicy() {
+    const interaction = runInteraction.snapshot(runInteractionInput())
+    return resolveComposerGuidance({ interaction,
       mode: logMode ? 'log' : planning ? 'plan' : 'normal',
       queuedCount: queuedUserMessages.length + queuedCompactionSubmissions.length })
   }
@@ -499,20 +491,10 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
   }
   const suggestions = new PromptSuggestion({
     key: () => `${sessionId ?? ''}:${runOwnership.owner}:${composerRevision}:${planning}:${!!logMode}:${loopSession.snapshot?.startedAt ?? ''}`,
-    eligible: () => suggestionInputReady() && composerPolicy().allowSuggestion,
-    canSample: trigger => suggestionInputReady() && (!loopSession.active || loopSession.waiting)
-      && composerPolicy(trigger).allowSuggestion,
-    productContext: trigger => {
-      const context = suggestionProductContext(composerPolicy(trigger), trigger)
-      if (suggestionGoal.value()) context.original_task = suggestionGoal.value()
-      const loop = loopSession.snapshot
-      if (context.state === 'waiting-loop' && loop) {
-        context.input_behavior += ` Current loop task: ${loop.task.label.slice(0, 80)}. Latest status: ${loop.reason?.slice(0, 120) ?? 'waiting'}.`
-      }
-      return context
-    },
-    allowsCommand: text => allowedSuggestionCommand(text, composerPolicy().actions),
-    start: (messages, context) => agent.suggestNextPrompt(messages, context),
+    eligible: () => suggestionInputReady() && (!loopSession.active || loopSession.waiting)
+      && composerPolicy().allowSuggestion,
+    allowsCommand: text => allowedSuggestionCommand(text, composerPolicy().allowedCommands),
+    start: messages => agent.suggestNextPrompt(messages),
     changed: () => renderer.requestRender(),
   })
   resources.add(() => suggestions.cancel())
@@ -1991,7 +1973,6 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
   }
 
   function commitLines(outputLines: OutputLine[]) {
-    if (!logMode) for (const row of outputLines) if (row.kind === 'user') suggestionGoal.observe(row.text)
     committer.commit(outputLines)
   }
 
@@ -2198,8 +2179,6 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
       const { messagesToOutputLines } = await import('../render/output.js')
       const { transcriptToMessages } = await import('../session/transcript.js')
       const messages = transcriptToMessages(transcript)
-      // Capture the first real user request before selecting the painted tail.
-      suggestionGoal.restore(messages)
       // A resumed session starts with no active plan; plan mode is re-entered
       // via /plan on the live conversation.
       planModeItems = []
@@ -2274,7 +2253,6 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
     const submissions = queuedCompactionSubmissions
     queuedCompactionSubmissions = []
     for (const submission of submissions) {
-      suggestionGoal.observe(submission.expandedText)
       commitLines(buildUserMessage(submission.displayText))
       await runQuery(submission.expandedText, submission.contentJson)
     }
@@ -2488,6 +2466,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
     renderer.requestRender()
 
     let completed = false
+    let suggestionBoundary = false
     try {
       const stream = prebuiltStream
         ?? await agent.query(text, sessionId ?? undefined, planning ? 'planning_interactive' : 'interactive', contentJson, hostToolExtension?.specsJson ?? HOST_TOOL_SPECS_JSON)
@@ -2574,7 +2553,8 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
           }
         }
 
-        if (isSuggestionBoundary(event)) requestProductSuggestion('answer')
+        if (event.kind === 'turn_started' || event.kind === 'error') suggestionBoundary = false
+        if (isSuggestionBoundary(event)) suggestionBoundary = true
 
         // Reconcile against the native queue instead of draining the visible
         // copy wholesale: OneAtATime mode may consume only the first of several
@@ -2635,6 +2615,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
         stopSpinner()
         if (!completed) suggestions.cancel()
         if (loopRun) loopSession.endRun(completed ? 'ok' : 'error')
+        else if (completed && suggestionBoundary) requestProductSuggestion('answer')
         commitRunFooter()
         if (taskSession.unfinishedFlow(hostToolExtension)) {
           commitSystem('sys-task-incomplete', '  Task change not saved yet · reply to continue editing, or /task cancel')
@@ -3218,8 +3199,6 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
             // In log mode, send to forked agent
             runLogQuery(logMode, expandedText)
           } else {
-            // Preserve the actual request, not a folded paste placeholder.
-            suggestionGoal.observe(expandedText)
             commitLines(buildUserMessage(displayText))
             // If the model stopped the task edit with a plain-text question,
             // the next reply is still in that edit flow, not a normal coding
@@ -3446,7 +3425,6 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
     planning = result.planning
     if (result.overlay) overlay = result.overlay
     if (result.clearContext) {
-      suggestionGoal.reset()
       composerRevision++
       suggestions.cancel()
       taskSession.cancelFlow()
@@ -3477,7 +3455,6 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
       resumeCache.replace(preloadedSessions)
     }
     if (result.newSession) {
-      suggestionGoal.reset()
       composerRevision++
       suggestions.cancel()
       taskSession.cancelFlow()

@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { seedSmokeHome, smokeEnvironment } from './helpers/smoke-home.js'
-import { suggestionRequestContext, suggestionMessageText } from './helpers/suggestion-request.js'
+import { suggestionInstructions, suggestionMessageText } from './helpers/suggestion-request.js'
 
 // Explicit opt-in to a freshly built addon; never use the developer's HOME.
 const integration = process.env.EVOT_TEST_SUGGESTION_ADDON ? test : test.skip
@@ -15,8 +15,8 @@ integration(`native ${protocol} suggestion preserves message roles and stops aft
     expect(new URL(request.url).pathname).toBe(protocol === 'openai' ? '/v1/chat/completions' : '/v1/messages')
     const body = await request.json() as Record<string, unknown>
     requests.push(body)
-    const input = suggestionRequestContext(body)
-    const text = input.product_context ? '/done' : 'Run the tests'
+    suggestionInstructions(body)
+    const text = 'Run the tests'
     if (protocol === 'anthropic') {
       const events = [
         { type: 'message_start', message: { id: 'fixture', role: 'assistant', content: [], model: 'service-model', usage: { input_tokens: 10, output_tokens: 0 } } },
@@ -51,11 +51,9 @@ integration(`native ${protocol} suggestion preserves message roles and stops aft
     child = Bun.spawn([process.execPath, '--eval', `
       const { NapiAgent } = require(${JSON.stringify(process.env.EVOT_TEST_SUGGESTION_ADDON)});
       const agent = await NapiAgent.create(null, null);
-      const context = JSON.stringify([{role:'user',text:'Add the tests'}, {role:'assistant',text:'Tests are ready.'}]);
+      const context = JSON.stringify([{role:'user',text:'Implement the tests'},{role:'assistant',text:'Implementation is ready.'},{role:'user',text:'Add the tests'}, {role:'assistant',text:'Tests are ready.'}]);
       const request = agent.suggestNextPrompt(context);
       if (await request.result() !== 'Run the tests') throw new Error('missing native suggestion');
-      const product = { trigger: 'mode_changed', mode: 'plan', state: 'idle', input_behavior: 'Plan without edits.', original_task: 'Implement login with audit events', actions: [{text:'/done',description:'Return to normal mode.'}] };
-      if (await agent.suggestNextPrompt(context, JSON.stringify(product)).result() !== '/done') throw new Error('missing product context action');
       const fs = await import('node:fs/promises');
       await fs.writeFile(${JSON.stringify(join(root, 'models.cache.json'))}, JSON.stringify({schema_version:1,synced_at:2,response:{services:{}}}));
       if (await agent.suggestNextPrompt(context).result() !== null) throw new Error('unexpected fallback');
@@ -72,19 +70,16 @@ integration(`native ${protocol} suggestion preserves message roles and stops aft
     expect(code, stderr).toBe(0)
     expect(stdout.trim()).toBe('suggestion contract passed')
     expect(stdout + stderr).not.toContain('service-test-key')
-    expect(requests).toHaveLength(2)
-    expect(suggestionRequestContext(requests[1]!).product_context?.mode).toBe('plan')
-    expect(suggestionRequestContext(requests[1]!).original_task).toBe('Implement login with audit events')
+    expect(requests).toHaveLength(1)
     const messages = requests[0]!.messages as { role: string; content: unknown }[]
-    expect(messages.map(message => message.role)).toEqual(['user', 'assistant', 'user'])
-    expect(suggestionMessageText(messages[0]!.content)).toBe('Add the tests')
-    expect(suggestionMessageText(messages[1]!.content)).toBe('Tests are ready.')
-    expect(suggestionMessageText(messages[2]!.content)).toContain('<next_prompt_suggestion>')
-    expect(suggestionRequestContext(requests[0]!).original_task).toBe('Add the tests')
+    expect(messages.map(message => message.role)).toEqual(['user', 'assistant', 'user', 'assistant', 'user'])
+    expect(suggestionMessageText(messages[2]!.content)).toBe('Add the tests')
+    expect(suggestionMessageText(messages[3]!.content)).toBe('Tests are ready.')
+    expect(suggestionMessageText(messages[4]!.content)).toContain('<next_prompt_suggestion>')
     expect(requests[0]!.model).toBe('service-model')
     expect(requests[0]!.max_tokens).toBe(32)
     expect(requests[0]!.tools ?? []).toEqual([])
-    expect(JSON.stringify(requests[0]!.messages)).toContain('language_reference')
+    expect(JSON.stringify(requests[0]!.messages)).not.toContain('language_reference')
   } finally {
     if (deadline) clearTimeout(deadline)
     if (child) { child.kill(); await child.exited }

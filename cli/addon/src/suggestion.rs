@@ -13,17 +13,10 @@ pub struct NapiSuggestion {
 }
 
 impl NapiSuggestion {
-    pub fn start(
-        messages: Vec<evot::suggestion::SuggestionMessage>,
-        product: Option<evot::suggestion::SuggestionProductContext>,
-    ) -> Self {
+    pub fn start(messages: Vec<evot::suggestion::SuggestionMessage>) -> Self {
         let cancel = CancellationToken::new();
         let task_cancel = cancel.clone();
-        let handle = tokio::spawn(evot::suggestion::generate_with_context(
-            messages,
-            product,
-            task_cancel,
-        ));
+        let handle = tokio::spawn(evot::suggestion::generate(messages, task_cancel));
         Self {
             handle: Mutex::new(Some(handle)),
             cancel,

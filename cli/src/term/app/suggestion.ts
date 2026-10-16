@@ -1,24 +1,34 @@
 import type { NativeSuggestion } from '../../native/contracts/ports.js'
 import type { UIMessage } from './types.js'
 import type { OutputLine } from '../../render/output.js'
-import type { SuggestionProductContext, SuggestionTrigger } from './composer-guidance.js'
+import type { SuggestionTrigger } from './composer-guidance.js'
 
 export interface SuggestionMessage { role: 'user' | 'assistant'; text: string }
 
-/** Only visible prose, never thinking, tool arguments/results, system notices
- * or the whole transcript. Rust independently applies its token/window cap. */
+const HISTORY_TOKENS = 4096
+
+function historyTokens(message: SuggestionMessage): number {
+  return Math.ceil(JSON.stringify(message).length / 4)
+}
+
+/** Whole recent messages only. Stop at the first oversized message, like
+ * Codex; do not cut messages or fill gaps with unrelated older requests. */
 export function suggestionContext(messages: readonly UIMessage[]): SuggestionMessage[] {
   const recent: SuggestionMessage[] = []
-  for (let i = messages.length - 1; i >= 0 && recent.length < 6; i--) {
+  let remaining = HISTORY_TOKENS
+  for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i]!
     if (message.role !== 'user' && message.role !== 'assistant') continue
-    if (message.content?.some(block => block.type === 'tool_call')) continue
+    if (message.content?.some(block => block.type === 'tool_call')) break
     const raw = message.role === 'assistant' && message.content
       ? message.content.filter(block => block.type === 'text').map(block => block.text).join('\n')
       : message.text
-    if (!raw.trim()) continue
-    const text = raw.length <= 1024 ? raw : `${raw.slice(0, 256)}…${raw.slice(-767)}`
-    recent.push({ role: message.role, text })
+    if (!raw.trim() || raw.length > HISTORY_TOKENS * 4) break
+    const item = { role: message.role, text: raw }
+    const tokens = historyTokens(item)
+    if (tokens > remaining) break
+    remaining -= tokens
+    recent.push(item)
   }
   return recent.reverse()
 }
@@ -28,20 +38,24 @@ export function suggestionContext(messages: readonly UIMessage[]): SuggestionMes
  * rawMarkdown is shared by every rendered line, so take only the zone end. */
 export function suggestionHistoryFromLines(lines: readonly OutputLine[]): UIMessage[] {
   const recent: UIMessage[] = []
-  for (let i = lines.length - 1; i >= 0 && recent.length < 6; i--) {
+  let remaining = HISTORY_TOKENS
+  for (let i = lines.length - 1; i >= 0; i--) {
     const row = lines[i]!
-    if (row.kind === 'user') {
-      recent.push({ id: row.id, role: 'user', text: row.text, timestamp: row.timestamp ?? 0 })
-    } else if (row.kind === 'assistant' && row.rawMarkdown && row.zoneEnd
-        && recent.at(-1)?.role !== 'assistant') {
-      recent.push({ id: row.id, role: 'assistant', text: row.rawMarkdown, timestamp: row.timestamp ?? 0 })
-    }
+    const role = row.kind === 'user' ? 'user' : row.kind === 'assistant' && row.rawMarkdown && row.zoneEnd
+      && recent.at(-1)?.role !== 'assistant' ? 'assistant' : null
+    if (!role) continue
+    const text = role === 'user' ? row.text : row.rawMarkdown!
+    if (!text.trim() || text.length > HISTORY_TOKENS * 4) break
+    const tokens = historyTokens({ role, text })
+    if (tokens > remaining) break
+    remaining -= tokens
+    recent.push({ id: row.id, role, text, timestamp: row.timestamp ?? 0 })
   }
   return recent.reverse()
 }
 
-/** Start at the earliest authoritative final-answer boundary, before run
- * teardown/cloud sync. Never sample every delta or a tool-bearing response. */
+/** Recognize authoritative answers; sampling starts only once the run is
+ * idle. Never sample deltas, commentary or a tool-bearing response. */
 export function isSuggestionBoundary(event: { kind: string; payload: Record<string, unknown> }): boolean {
   if (event.kind !== 'assistant_completed' || event.payload.stop_reason !== 'stop') return false
   const content = event.payload.content
@@ -57,15 +71,12 @@ export class PromptSuggestion {
   private request: NativeSuggestion | null = null
   private value: { key: string; text: string } | null = null
   private lastAttempt = ''
-  private trigger: SuggestionTrigger = 'answer'
 
   constructor(private readonly host: {
     key(): string
     eligible(): boolean
-    canSample?(trigger: SuggestionTrigger): boolean
-    productContext?(trigger: SuggestionTrigger): SuggestionProductContext
     allowsCommand?(text: string): boolean
-    start(messages: SuggestionMessage[], context?: SuggestionProductContext): NativeSuggestion
+    start(messages: SuggestionMessage[]): NativeSuggestion
     changed(): void
   }) {}
 
@@ -80,25 +91,24 @@ export class PromptSuggestion {
   }
 
   start(messages: readonly UIMessage[], trigger: SuggestionTrigger = 'answer'): void {
-    if (!(this.host.canSample?.(trigger) ?? this.host.eligible())) return
+    if (!this.host.eligible()) return
     const context = suggestionContext(messages)
     const lastUser = context.findLast(message => message.role === 'user')
-    if (!lastUser || (trigger === 'answer' && (context.at(-1)?.role !== 'assistant' || lastUser.text.trimStart().startsWith('/')))) return
+    if (!lastUser || context.at(-1)?.role !== 'assistant' || context.filter(message => message.role === 'assistant').length < 2
+      || (trigger === 'answer' && lastUser.text.trimStart().startsWith('/'))) return
     const key = this.host.key()
-    const product = this.host.productContext?.(trigger)
-    const attempt = JSON.stringify([key, trigger, context, product])
+    const attempt = JSON.stringify([key, trigger, context])
     if (attempt === this.lastAttempt) return
     this.cancel()
     this.lastAttempt = attempt
-    this.trigger = trigger
     const generation = this.generation
     try {
-      const request = this.host.start(context, product)
+      const request = this.host.start(context)
       this.request = request
       void request.result().then(text => {
         if (generation !== this.generation || key !== this.host.key()) return
         this.request = null
-        if (!(this.host.canSample?.(trigger) ?? this.host.eligible()) || !text?.trim()) return
+        if (!this.host.eligible() || !text?.trim()) return
         // Defense in depth for a mismatched addon: ghost text is one short
         // plain line. Slash actions must be exact registered actions offered
         // by the current product state, and still only fill the editor.
@@ -118,7 +128,7 @@ export class PromptSuggestion {
   /** Reconcile host state transitions (including asynchronously opened
    * overlays or attachments) without starting any new request on redraw. */
   reconcile(): void {
-    if ((this.request || this.value) && !(this.host.canSample?.(this.trigger) ?? this.host.eligible())) this.cancel()
+    if ((this.request || this.value) && !this.host.eligible()) this.cancel()
   }
 
   text(): string {

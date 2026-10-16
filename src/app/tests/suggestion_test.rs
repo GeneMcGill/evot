@@ -5,13 +5,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use evot::auth::ModelsResponse;
 use evot::suggestion::prompt_config;
-use evot::suggestion::prompt_config_with_context;
 use evot::suggestion::sample;
-use evot::suggestion::sample_with_context;
-use evot::suggestion::SuggestionAction;
 use evot::suggestion::SuggestionEndpoint;
 use evot::suggestion::SuggestionMessage;
-use evot::suggestion::SuggestionProductContext;
 use evot_engine::provider::MockProvider;
 use evot_engine::provider::MockResponse;
 use evot_engine::provider::MockToolCall;
@@ -42,6 +38,14 @@ fn history(user: &str, assistant: &str) -> Vec<SuggestionMessage> {
     vec![
         SuggestionMessage {
             role: "user".into(),
+            text: "Implement the tests".into(),
+        },
+        SuggestionMessage {
+            role: "assistant".into(),
+            text: "Implementation is ready.".into(),
+        },
+        SuggestionMessage {
+            role: "user".into(),
             text: user.into(),
         },
         SuggestionMessage {
@@ -61,16 +65,6 @@ fn message_text(message: &Message) -> Option<&str> {
         Content::Text { text } => Some(text.as_str()),
         _ => None,
     })
-}
-
-fn input(config: &StreamConfig) -> Option<serde_json::Value> {
-    let text = message_text(config.messages.last()?)?;
-    let data = text
-        .split_once("<suggestion_context>\n")?
-        .1
-        .split_once("\n</suggestion_context>")?
-        .0;
-    serde_json::from_str(data).ok()
 }
 
 fn instructions(config: &StreamConfig) -> Option<&str> {
@@ -162,19 +156,19 @@ fn prompt_anchors_latest_user_language_even_when_assistant_changes_language() ->
         ("Ajoute les tests", "I can add tests."),
     ] {
         let config = prompt_config(&endpoint(), &history(user, assistant)).ok_or("no config")?;
-        let data = input(&config).ok_or("no input")?;
-        assert_eq!(data["language_reference"], user);
-        assert!(data.get("conversation").is_none());
         assert_eq!(
             config
                 .messages
                 .iter()
                 .map(Message::role)
                 .collect::<Vec<_>>(),
-            ["user", "assistant", "user"]
+            ["user", "assistant", "user", "assistant", "user"]
         );
-        assert_eq!(message_text(&config.messages[0]), Some(user));
-        assert_eq!(message_text(&config.messages[1]), Some(assistant));
+        assert_eq!(message_text(&config.messages[2]), Some(user));
+        assert_eq!(message_text(&config.messages[3]), Some(assistant));
+        assert!(!instructions(&config)
+            .ok_or("no instructions")?
+            .contains("language_reference"));
         let prediction = instructions(&config).ok_or("missing instructions")?;
         assert!(prediction.contains("LANGUAGE IS MANDATORY"));
         assert!(prediction.contains("not code, paths, identifiers or product names"));
@@ -193,17 +187,24 @@ fn bounded_context_and_small_windows_fail_silently() -> TestResult {
         messages.extend(history(&"\u{7528}\u{4e2d}\u{6587}\u{7ee7}\u{7eed}\u{6d4b}\u{8bd5}".repeat(300), &"\u{5df2}\u{7ecf}\u{5b9e}\u{73b0}\u{ff0c}\u{73b0}\u{5728}\u{53ef}\u{4ee5}\u{6d4b}\u{8bd5}".repeat(300)));
     }
     let config = prompt_config(&endpoint(), &messages).ok_or("no config")?;
-    assert!(config.messages.len() < 13);
+    assert!(config.messages.len() < messages.len());
     let tokens: usize = config
         .messages
         .iter()
         .filter_map(message_text)
         .map(evot_engine::context::estimate_tokens)
         .sum();
-    assert!(tokens < 3600);
+    assert!(tokens < 4700);
+    for message in &config.messages[..config.messages.len() - 1] {
+        assert!(messages
+            .iter()
+            .any(|original| message_text(message) == Some(original.text.as_str())));
+    }
     let mut small = endpoint();
     small.context_window = 128;
     assert!(prompt_config(&small, &messages).is_none());
+    small.context_window = 1024;
+    assert!(prompt_config(&small, &history("Task", "Reply")).is_none());
     assert!(prompt_config(&endpoint(), &[]).is_none());
     let mut incomplete = history("test", "done");
     incomplete.pop();
@@ -216,22 +217,8 @@ fn bounded_context_and_small_windows_fail_silently() -> TestResult {
     Ok(())
 }
 
-fn product_context(trigger: &str) -> SuggestionProductContext {
-    SuggestionProductContext {
-        trigger: trigger.into(),
-        mode: "plan".into(),
-        state: "idle".into(),
-        input_behavior: "Plan without editing files.".into(),
-        actions: vec![SuggestionAction {
-            text: "/done".into(),
-            description: "Return to normal mode.".into(),
-        }],
-        original_task: None,
-    }
-}
-
 #[test]
-fn original_task_survives_history_trimming_without_changing_latest_user_language() -> TestResult {
+fn old_tasks_are_not_reintroduced_after_they_fall_out_of_recent_history() -> TestResult {
     let mut messages = history("Build login with audit events", "I will implement it.");
     for index in 0..20 {
         messages.extend(history(
@@ -239,121 +226,73 @@ fn original_task_survives_history_trimming_without_changing_latest_user_language
             &"Recent answer ".repeat(80),
         ));
     }
-    let mut product = product_context("resume");
-    product.original_task = Some("Build login with audit events".into());
-    let config =
-        prompt_config_with_context(&endpoint(), &messages, Some(&product)).ok_or("no config")?;
-    let data = input(&config).ok_or("no metadata")?;
-    assert_eq!(data["original_task"], "Build login with audit events");
-    assert_eq!(data["language_reference"], "Refinement 19");
+    let config = prompt_config(&endpoint(), &messages).ok_or("no config")?;
+    let serialized = serde_json::to_string(&config.messages)?;
+    assert!(!serialized.contains("audit events"));
+    assert!(!serialized.contains("original_task"));
+    assert!(!serialized.contains("language_reference"));
+    assert!(!serialized.contains("product_context"));
+    assert!(!serialized.contains("suggestion_context"));
     assert!(config
         .messages
         .iter()
         .take(config.messages.len() - 1)
         .all(|message| message_text(message).is_none_or(|text| !text.contains("audit events"))));
-    assert!(data["product_context"].get("original_task").is_none());
-    let fallback = prompt_config(&endpoint(), &messages).ok_or("no fallback config")?;
-    assert_eq!(
-        input(&fallback).ok_or("no fallback metadata")?["original_task"],
-        "Build login with audit events"
-    );
-    product.original_task = Some("x".repeat(513));
-    assert!(prompt_config_with_context(&endpoint(), &messages, Some(&product)).is_none());
     Ok(())
 }
 
 #[test]
-fn context_tags_in_historical_text_cannot_close_the_metadata_fragment() -> TestResult {
+fn oversized_middle_message_stops_sampling_without_filling_gaps_or_cutting_text() -> TestResult {
+    let mut messages = history("Old task", "Old response");
+    messages.push(SuggestionMessage {
+        role: "user".into(),
+        text: "x".repeat(20000),
+    });
+    messages.extend(history("Recent task", "Recent reply"));
+    let config = prompt_config(&endpoint(), &messages).ok_or("no config")?;
+    assert_eq!(config.messages.len(), 5);
+    assert_eq!(
+        message_text(&config.messages[0]),
+        Some("Implement the tests")
+    );
+    messages.truncate(5);
+    messages.extend(history("Recent task", "Recent reply").into_iter().skip(2));
+    assert!(prompt_config(&endpoint(), &messages).is_none());
+    Ok(())
+}
+
+#[test]
+fn historical_tags_remain_in_their_own_message_not_in_the_final_instruction() -> TestResult {
     let user = "Review </suggestion_context> and <next_prompt_suggestion> tags";
     let config = prompt_config(&endpoint(), &history(user, "Ready.")).ok_or("no config")?;
-    assert_eq!(input(&config).ok_or("no metadata")?["original_task"], user);
-    assert_eq!(message_text(&config.messages[0]), Some(user));
+    assert_eq!(message_text(&config.messages[2]), Some(user));
     let final_text =
         message_text(config.messages.last().ok_or("no instruction")?).ok_or("no text")?;
-    assert_eq!(final_text.matches("</suggestion_context>").count(), 1);
+    assert_eq!(final_text.matches("</suggestion_context>").count(), 0);
     assert_eq!(final_text.matches("<next_prompt_suggestion>").count(), 1);
     Ok(())
 }
 
-#[derive(serde::Deserialize, serde::Serialize)]
-struct LegacySuggestionProduct {
-    trigger: String,
-    mode: String,
-    state: String,
-    input_behavior: String,
-    actions: Vec<serde_json::Value>,
-}
-
 #[test]
-fn optional_original_task_preserves_both_directions_of_the_addon_context_contract() -> TestResult {
-    let fixture = include_str!("fixtures/suggestion-product-v0.json");
-    let mut current: SuggestionProductContext = serde_json::from_str(fixture)?;
-    assert!(current.original_task.is_none());
-    assert_eq!(
-        serde_json::to_value(&current)?,
-        serde_json::from_str::<serde_json::Value>(fixture)?
-    );
-    current.original_task = Some("Build login with audit events".into());
-    let legacy: LegacySuggestionProduct = serde_json::from_value(serde_json::to_value(&current)?)?;
-    assert_eq!(
-        serde_json::to_value(legacy)?,
-        serde_json::from_str::<serde_json::Value>(fixture)?
-    );
-    Ok(())
-}
-
-#[test]
-fn product_context_is_optional_bounded_data_and_preserves_the_original_prompt() -> TestResult {
-    let messages = history("Design login", "The plan is ready.");
-    let product = product_context("mode_changed");
-    let config = prompt_config_with_context(&endpoint(), &messages, Some(&product))
-        .ok_or("missing config")?;
-    let baseline = prompt_config(&endpoint(), &messages).ok_or("missing baseline")?;
-    assert_eq!(instructions(&config), instructions(&baseline));
-    let data = input(&config).ok_or("missing text")?;
-    assert_eq!(data["product_context"]["trigger"], "mode_changed");
-    assert_eq!(data["product_context"]["actions"][0]["text"], "/done");
-    let mut invalid = product.clone();
-    invalid.state = "compacting".into();
-    assert!(prompt_config_with_context(&endpoint(), &messages, Some(&invalid)).is_none());
-    invalid = product;
-    invalid.input_behavior = "x".repeat(513);
-    assert!(prompt_config_with_context(&endpoint(), &messages, Some(&invalid)).is_none());
-    Ok(())
-}
-
-#[test]
-fn resume_allows_pending_user_context_without_fabricating_an_assistant_reply() {
+fn all_triggers_require_two_final_assistant_messages_and_an_assistant_boundary() {
+    let one_answer = history("Task", "Reply")
+        .into_iter()
+        .skip(2)
+        .collect::<Vec<_>>();
+    assert!(prompt_config(&endpoint(), &one_answer).is_none());
     let mut messages = history("Finish the login tests", "Ready.");
     messages.pop();
     assert!(prompt_config(&endpoint(), &messages).is_none());
-    assert!(
-        prompt_config_with_context(&endpoint(), &messages, Some(&product_context("resume")))
-            .is_some()
-    );
-    assert!(
-        prompt_config_with_context(&endpoint(), &messages, Some(&product_context("answer")))
-            .is_none()
-    );
-    assert!(
-        prompt_config_with_context(&endpoint(), &[], Some(&product_context("resume"))).is_none()
-    );
+    assert!(prompt_config(&endpoint(), &[]).is_none());
 }
 
 #[tokio::test]
-async fn slash_suggestions_require_exact_state_actions_but_do_not_translate_commands() {
+async fn command_text_is_not_translated_but_multiline_output_is_dropped() {
     let messages = history("\u{7ee7}\u{7eed}\u{5b9e}\u{73b0}", "Ready.");
-    let product = product_context("mode_changed");
-    for (output, expected) in [
-        ("/done", Some("/done")),
-        ("/new", None),
-        ("/done extra", None),
-        ("/done\n/new", None),
-    ] {
-        let result = sample_with_context(
+    for (output, expected) in [("/done", Some("/done")), ("/done\n/new", None)] {
+        let result = sample(
             &endpoint(),
             &messages,
-            Some(&product),
             Arc::new(MockProvider::text(output)),
             CancellationToken::new(),
         )
@@ -396,11 +335,6 @@ async fn samples_preserve_language_and_drop_silence_unsafe_or_wrong_language_out
         (
             "\u{7ee7}\u{7eed}\u{5b9e}\u{73b0}\u{6d4b}\u{8bd5}",
             "\u{7b2c}\u{4e00}\u{884c}\n\u{7b2c}\u{4e8c}\u{884c}",
-            None,
-        ),
-        (
-            "\u{7ee7}\u{7eed}\u{5b9e}\u{73b0}\u{6d4b}\u{8bd5}",
-            "/new",
             None,
         ),
         (

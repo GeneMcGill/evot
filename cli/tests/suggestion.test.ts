@@ -1,11 +1,13 @@
 import { expect, test } from 'bun:test'
 import { PromptSuggestion, suggestionContext, isSuggestionBoundary, suggestionHistoryFromLines } from '../src/term/app/suggestion.js'
 import type { UIMessage } from '../src/term/app/types.js'
-import { resolveComposerGuidance, suggestionProductContext, allowedSuggestionCommand, type SuggestionProductContext } from '../src/term/app/composer-guidance.js'
+import { resolveComposerGuidance, allowedSuggestionCommand } from '../src/term/app/composer-guidance.js'
 import { resolveRunInteraction } from '../src/term/app/run-interaction.js'
 
 function messages(): UIMessage[] {
   return [
+    { id: 'u0', role: 'user', text: 'Implement the tests', timestamp: 0 },
+    { id: 'a0', role: 'assistant', text: 'The implementation is ready.', timestamp: 0 },
     { id: 'u', role: 'user', text: '\u7ee7\u7eed\u5b9e\u73b0 suggestion \u6d4b\u8bd5', timestamp: 1 },
     { id: 'a', role: 'assistant', text: '', timestamp: 2, content: [
       { type: 'thinking', text: 'private reasoning', contentIndex: 0 },
@@ -14,19 +16,19 @@ function messages(): UIMessage[] {
   ]
 }
 
-function harness(options: { canSample?: () => boolean; productContext?: () => SuggestionProductContext; allowsCommand?: (text: string) => boolean } = {}) {
+function harness(options: { allowsCommand?: (text: string) => boolean } = {}) {
   let key = 'session:1'
   let eligible = true
   let changes = 0
-  const requests: { resolve(value: string | null): void; reject(error: Error): void; aborted: boolean; context?: SuggestionProductContext }[] = []
+  const requests: { resolve(value: string | null): void; reject(error: Error): void; aborted: boolean }[] = []
   const controller = new PromptSuggestion({
     key: () => key, eligible: () => eligible, changed: () => changes++,
     ...options,
-    start: (_messages, context) => {
+    start: () => {
       let resolve!: (value: string | null) => void
       let reject!: (error: Error) => void
       const result = new Promise<string | null>((yes, no) => { resolve = yes; reject = no })
-      const request = { resolve, reject, aborted: false, context }
+      const request = { resolve, reject, aborted: false }
       requests.push(request)
       return { result: () => result, abort: () => { request.aborted = true } }
     },
@@ -37,16 +39,13 @@ function harness(options: { canSample?: () => boolean; productContext?: () => Su
 
 const tick = () => new Promise<void>(resolve => queueMicrotask(resolve))
 
-test('context contains only recent visible user/assistant prose, not thinking/tools/system', () => {
+test('context stops at incomplete tool flow instead of filling from older requests', () => {
   const history = messages()
   history.unshift({ id: 's', role: 'system', text: 'secret instructions', timestamp: 0 })
-  history.splice(2, 0, { id: 'tool', role: 'assistant', text: 'tool chatter', timestamp: 1, content: [
+  history.splice(history.length - 1, 0, { id: 'tool', role: 'assistant', text: 'tool chatter', timestamp: 1, content: [
     { type: 'tool_call', contentIndex: 0, toolCall: { id: 't', name: 'bash', args: { command: 'secret' }, status: 'done' } },
   ] })
-  expect(suggestionContext(history)).toEqual([
-    { role: 'user', text: '\u7ee7\u7eed\u5b9e\u73b0 suggestion \u6d4b\u8bd5' },
-    { role: 'assistant', text: 'Tests are ready.' },
-  ])
+  expect(suggestionContext(history)).toEqual([{ role: 'assistant', text: 'Tests are ready.' }])
 })
 
 test('live context includes committed users even though AppState only retained assistant events', () => {
@@ -63,21 +62,25 @@ test('live context includes committed users even though AppState only retained a
   ])
   const h = harness()
   h.controller.start(history)
-  expect(h.requests).toHaveLength(1)
+  expect(h.requests).toHaveLength(0)
 })
 
-test('context is bounded and keeps the end of long replies', () => {
+test('context is a bounded contiguous suffix of whole messages', () => {
   const history = Array.from({ length: 30 }, (_, index): UIMessage => ({
     id: String(index), role: index % 2 ? 'assistant' : 'user', timestamp: index,
     text: 'x'.repeat(3000) + '\u7ed3\u8bba',
   }))
   const context = suggestionContext(history)
-  expect(context).toHaveLength(6)
-  expect(context.every(message => message.text.length <= 1024)).toBe(true)
-  expect(context.at(-1)?.text.endsWith('\u7ed3\u8bba')).toBe(true)
+  expect(context).toHaveLength(5)
+  expect(context.every(message => message.text === history[0]!.text)).toBe(true)
+  expect(suggestionContext([...messages(), { ...messages()[3]!, content: undefined, text: 'x'.repeat(20000) }])).toEqual([])
+  const oversized = { ...messages()[0]!, text: 'x'.repeat(20000) }
+  expect(suggestionContext([messages()[0]!, oversized, ...messages().slice(-2)])).toEqual([
+    { role: 'user', text: messages()[2]!.text }, { role: 'assistant', text: 'Tests are ready.' },
+  ])
 })
 
-test('starts at authoritative text-only stop, not per delta or after run teardown', () => {
+test('recognizes text-only answer boundaries, not deltas or tool-bearing responses', () => {
   const payload = { stop_reason: 'stop', content: [{ type: 'text', text: 'Done' }] }
   expect(isSuggestionBoundary({ kind: 'assistant_completed', payload })).toBe(true)
   for (const kind of ['assistant_delta', 'run_finished', 'tool_finished']) {
@@ -192,30 +195,34 @@ test('duplicate state notifications and redraws never restart a request, includi
   expect(h.requests).toHaveLength(2)
 })
 
-test('resume can sample an interrupted conversation ending with a user message', () => {
-  const h = harness()
-  h.controller.start([messages()[0]!], 'resume')
-  expect(h.requests).toHaveLength(1)
+test('Codex boundaries apply equally to resume, mode changes and loop waits', () => {
+  for (const trigger of ['answer', 'resume', 'mode_changed', 'loop_waiting'] as const) {
+    const h = harness()
+    h.controller.start(messages().slice(-2), trigger)
+    h.controller.start([...messages(), messages()[0]!], trigger)
+    expect(h.requests).toHaveLength(0)
+    h.controller.start(messages(), trigger)
+    expect(h.requests).toHaveLength(1)
+  }
 })
 
-test('early final-answer sampling stores a result without showing it while still active', async () => {
-  const h = harness({ canSample: () => true })
+test('busy input never starts an early speculative sample', async () => {
+  const h = harness()
   h.setEligible(false)
+  h.controller.start(messages())
+  expect(h.requests).toHaveLength(0)
+  h.setEligible(true)
   h.controller.start(messages())
   h.requests[0]!.resolve('Run the tests')
   await tick()
-  expect(h.controller.text()).toBe('')
-  h.setEligible(true)
   expect(h.controller.text()).toBe('Run the tests')
 })
 
-test('current product context and exact command allowlist govern both receipt and Tab', async () => {
+test('local command allowlist governs both receipt and acceptance without model metadata', async () => {
   const guidance = resolveComposerGuidance({ interaction: resolveRunInteraction({ active: false, owner: null, loopParked: true }), mode: 'plan' })
-  const product = suggestionProductContext(guidance, 'loop_waiting')
-  let actions = guidance.actions
-  const h = harness({ productContext: () => product, allowsCommand: text => allowedSuggestionCommand(text, actions) })
+  let actions = guidance.allowedCommands
+  const h = harness({ allowsCommand: text => allowedSuggestionCommand(text, actions) })
   h.controller.start(messages(), 'loop_waiting')
-  expect(h.requests[0]!.context).toEqual(product)
   h.requests[0]!.resolve('/loop 15m')
   await tick()
   expect(h.controller.text()).toBe('/loop 15m')
@@ -230,7 +237,7 @@ test('current product context and exact command allowlist govern both receipt an
 
 test('commands and incomplete context do not start samples', () => {
   const h = harness()
-  h.controller.start([{ ...messages()[0]!, text: '/sessions \u5c0f\u7ea2\u4e66' }, messages()[1]!])
+  h.controller.start([...messages().slice(0, 2), { ...messages()[2]!, text: '/sessions \u5c0f\u7ea2\u4e66' }, messages()[3]!])
   h.controller.start([messages()[0]!])
   expect(h.requests).toHaveLength(0)
 })

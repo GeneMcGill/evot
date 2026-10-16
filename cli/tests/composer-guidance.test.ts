@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { resolveComposerGuidance, suggestionProductContext, allowedSuggestionCommand } from '../src/term/app/composer-guidance.js'
+import { resolveComposerGuidance, allowedSuggestionCommand } from '../src/term/app/composer-guidance.js'
 import { resolveRunInteraction, type RunInteractionState } from '../src/term/app/run-interaction.js'
 import { buildPromptBlocks } from '../src/term/viewmodel/prompt.js'
 import { promptFromSnapshot } from '../src/term/viewmodel/prompt-snapshot.js'
@@ -54,22 +54,17 @@ test('ghost text never removes loop controls or the plan no-edit warning', () =>
 })
 
 test('only exact registered actions exposed by the current state are acceptable', () => {
-  const actions = policy('waiting-loop', 'plan').actions
+  const actions = policy('waiting-loop', 'plan').allowedCommands
   for (const command of ['/done', '/loop 15m', '/loop stop']) expect(allowedSuggestionCommand(command, actions)).toBe(true)
   for (const command of ['/new', '/loop stop; rm -rf .', '/loop 15m extra', '/done\n/new']) {
     expect(allowedSuggestionCommand(command, actions)).toBe(false)
   }
-  expect(allowedSuggestionCommand('/not_registered', [{ text: '/not_registered', description: 'Invalid' }])).toBe(false)
-  expect(allowedSuggestionCommand('/done', policy('idle').actions)).toBe(false)
+  expect(allowedSuggestionCommand('/not_registered', ['/not_registered'])).toBe(false)
+  expect(allowedSuggestionCommand('/done', policy('idle').allowedCommands)).toBe(false)
 })
 
-test('product facts are short and state-specific, not a rewrite of the Codex prompt', () => {
-  expect(suggestionProductContext(policy('waiting-loop'), 'loop_waiting')).toEqual({
-    trigger: 'loop_waiting', mode: 'normal', state: 'waiting-loop',
-    input_behavior: policy('waiting-loop').inputBehavior,
-    actions: [{ text: '/loop 15m', description: 'Change the loop interval to fifteen minutes.' },
-      { text: '/loop stop', description: 'Stop this loop.' }],
-  })
-  expect(suggestionProductContext(policy('idle', 'plan'), 'mode_changed').actions[0]?.text).toBe('/done')
-  expect(() => suggestionProductContext(policy('retrying'), 'answer')).toThrow()
+test('product guidance and allowed actions remain local state, independent of model input', () => {
+  expect(policy('waiting-loop').allowedCommands).toEqual(['/loop 15m', '/loop stop'])
+  expect(policy('idle', 'plan').allowedCommands).toEqual(['/done'])
+  expect(policy('retrying').allowSuggestion).toBe(false)
 })

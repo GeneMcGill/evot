@@ -12,13 +12,13 @@ use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
 use super::SuggestionEndpoint;
-use super::SuggestionProductContext;
 
 // Match Codex's safety deadline, including cold connection/gateway latency.
 // This is not a display delay: completion is displayed immediately and input
 // cancels instantly. Foreground interaction never waits for this request.
 pub const SUGGESTION_TIMEOUT: Duration = Duration::from_secs(8);
-const HISTORY_TOKENS: usize = 1_536;
+const HISTORY_TOKENS: usize = 4_096;
+const TOKEN_HEADROOM: usize = 1_024;
 const OUTPUT_TOKENS: u32 = 32;
 // Codex origin/fcoury/next-suggestion, context/next_prompt_suggestion.rs.
 // Preserve the source prompt, replacing only the product name and appending
@@ -46,7 +46,7 @@ Format: 2-12 words, match the user's style including capitalization, verbosity a
 
 Reply with ONLY the suggestion, no quotes or explanation.
 
-LANGUAGE IS MANDATORY: use the natural language of language_reference (the most recent user message), even if the assistant or earlier messages use another language. Infer language from the user's prose, not code, paths, identifiers or product names. Never translate the suggestion into the assistant's language."#;
+LANGUAGE IS MANDATORY: use the natural language of the most recent user message, even if the assistant or earlier messages use another language. Infer language from the user's prose, not code, paths, identifiers or product names. Never translate the suggestion into the assistant's language."#;
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct SuggestionMessage {
@@ -58,14 +58,6 @@ pub struct SuggestionMessage {
 /// compaction, transcript writes, main-model fallback or auth-refresh traffic.
 pub async fn generate(
     messages: Vec<SuggestionMessage>,
-    cancel: CancellationToken,
-) -> Option<String> {
-    generate_with_context(messages, None, cancel).await
-}
-
-pub async fn generate_with_context(
-    messages: Vec<SuggestionMessage>,
-    product: Option<SuggestionProductContext>,
     cancel: CancellationToken,
 ) -> Option<String> {
     let started = std::time::Instant::now();
@@ -81,14 +73,7 @@ pub async fn generate_with_context(
                 Arc::new(evot_engine::provider::OpenAiResponsesProvider)
             }
         };
-        sample_with_context(
-            &endpoint,
-            &messages,
-            product.as_ref(),
-            provider,
-            cancel.clone(),
-        )
-        .await
+        sample(&endpoint, &messages, provider, cancel.clone()).await
     };
     tokio::select! {
         biased;
@@ -103,27 +88,13 @@ pub async fn generate_with_context(
     }
 }
 
-/// Shared by transports and tests. Input is bounded independently of callers;
-/// a small endpoint window reduces history further, rather than enlarging it.
+/// A contiguous recent suffix, independently bounded from callers. Like
+/// Codex, skip sampling if the prompt cannot leave 1024 tokens of headroom.
 pub fn prompt_config(
     endpoint: &SuggestionEndpoint,
     messages: &[SuggestionMessage],
 ) -> Option<StreamConfig> {
-    prompt_config_with_context(endpoint, messages, None)
-}
-
-pub fn prompt_config_with_context(
-    endpoint: &SuggestionEndpoint,
-    messages: &[SuggestionMessage],
-    product: Option<&SuggestionProductContext>,
-) -> Option<StreamConfig> {
-    if product.is_some_and(|context| !context.valid()) {
-        return None;
-    }
-    let require_answer = product.is_none_or(|context| context.trigger == "answer");
-    if (require_answer && messages.last()?.role != "assistant")
-        || !messages.iter().any(|m| m.role == "user")
-    {
+    if messages.last()?.role != "assistant" {
         return None;
     }
     if messages
@@ -137,87 +108,52 @@ pub fn prompt_config_with_context(
     } else {
         endpoint.context_window as usize
     };
-    let mut budget = window
-        .saturating_sub(512 + OUTPUT_TOKENS as usize)
-        .min(HISTORY_TOKENS);
-    let mut recent = Vec::new();
-    for message in messages.iter().rev().take(12) {
-        if budget < 32 {
+    let mut budget = HISTORY_TOKENS;
+    let mut keep_from = messages.len();
+    for (index, message) in messages.iter().enumerate().rev() {
+        if message.text.trim().is_empty() {
+            return None;
+        }
+        let tokens = evot_engine::context::estimate_tokens(&serde_json::to_string(message).ok()?);
+        if tokens > budget {
             break;
         }
-        // One character is a conservative token budget for mixed CJK/ASCII.
-        // Keep both ends so a long answer retains its conclusion as well as
-        // its opening. JSON/role overhead is reserved separately.
-        let cap = budget.saturating_sub(24).min(512);
-        let text = bounded_text(&message.text, cap);
-        if text.trim().is_empty() {
-            continue;
-        }
-        budget = budget.saturating_sub(text.chars().count() + 24);
-        recent.push(SuggestionMessage {
-            role: message.role.clone(),
-            text,
-        });
+        keep_from = index;
+        budget = budget.saturating_sub(tokens);
     }
-    recent.reverse();
-    if (require_answer && recent.last()?.role != "assistant")
-        || !recent.iter().any(|m| m.role == "user")
+    let recent = &messages[keep_from..];
+    if recent
+        .iter()
+        .filter(|message| message.role == "assistant")
+        .count()
+        < 2
+        || !recent.iter().any(|message| message.role == "user")
     {
         return None;
     }
-    let language_reference = &recent
-        .iter()
-        .rev()
-        .find(|message| message.role == "user")?
-        .text;
-    let original_task = product
-        .and_then(|context| context.original_task.as_deref())
-        .filter(|task| !task.trim().is_empty())
-        .or_else(|| {
-            messages
-                .iter()
-                .find(|message| message.role == "user")
-                .map(|message| message.text.as_str())
-        })?;
-    let mut context = serde_json::json!({
-        "language_reference": language_reference,
-        "original_task": bounded_text(original_task, 512),
-    });
-    if let Some(product) = product {
-        let mut value = serde_json::to_value(product).ok()?;
-        if let Some(fields) = value.as_object_mut() {
-            fields.remove("original_task");
-        }
-        context["product_context"] = value;
-    }
-    // Retain causal roles instead of flattening the conversation into JSON.
-    // Like Codex, append the prediction instruction as the final user turn.
-    // Bounded UI facts and the independently retained initial task are data,
-    // not a replacement system prompt or a fabricated assistant response.
-    let context_json = serde_json::to_string(&context)
-        .ok()?
-        .replace('<', "\\u003c")
-        .replace('>', "\\u003e");
-    let final_instruction = format!(
-        "<suggestion_context>\n{context_json}\n</suggestion_context>\n\n<next_prompt_suggestion>\n{INSTRUCTIONS}\n</next_prompt_suggestion>",
-    );
+    // Same shape as Codex: a recent native-message suffix followed by one
+    // prediction instruction. Never reintroduce the start of a long session.
+    let final_instruction =
+        format!("<next_prompt_suggestion>\n{INSTRUCTIONS}\n</next_prompt_suggestion>");
     let input_tokens = recent
         .iter()
         .map(|message| evot_engine::context::estimate_tokens(&message.text) + 16)
         .sum::<usize>()
         + evot_engine::context::estimate_tokens(&final_instruction)
         + 64;
-    if input_tokens + OUTPUT_TOKENS as usize > window {
+    if input_tokens >= window.saturating_sub(TOKEN_HEADROOM) {
         return None;
     }
     let mut native_messages: Vec<Message> = recent
-        .into_iter()
+        .iter()
         .map(|message| {
             if message.role == "user" {
-                Message::user(message.text)
+                Message::user(message.text.clone())
             } else {
                 Message::Assistant {
-                    content: vec![Content::Text { text: message.text }],
+                    content: vec![Content::Text {
+                        text: message.text.clone(),
+                    }],
                     stop_reason: StopReason::Stop,
                     model: String::new(),
                     provider: String::new(),
@@ -256,37 +192,13 @@ pub fn prompt_config_with_context(
     })
 }
 
-fn bounded_text(text: &str, cap: usize) -> String {
-    let chars: Vec<char> = text.chars().collect();
-    if chars.len() <= cap {
-        return text.to_string();
-    }
-    let head = cap / 3;
-    let tail = cap.saturating_sub(head + 1);
-    chars[..head]
-        .iter()
-        .chain(std::iter::once(&'…'))
-        .chain(chars[chars.len() - tail..].iter())
-        .collect()
-}
-
 pub async fn sample(
     endpoint: &SuggestionEndpoint,
     messages: &[SuggestionMessage],
     provider: Arc<dyn StreamProvider>,
     cancel: CancellationToken,
 ) -> Option<String> {
-    sample_with_context(endpoint, messages, None, provider, cancel).await
-}
-
-pub async fn sample_with_context(
-    endpoint: &SuggestionEndpoint,
-    messages: &[SuggestionMessage],
-    product: Option<&SuggestionProductContext>,
-    provider: Arc<dyn StreamProvider>,
-    cancel: CancellationToken,
-) -> Option<String> {
-    let config = prompt_config_with_context(endpoint, messages, product)?;
+    let config = prompt_config(endpoint, messages)?;
     let child = cancel.child_token();
     let _guard = child.clone().drop_guard();
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
@@ -332,7 +244,7 @@ pub async fn sample_with_context(
             _ => {}
         }
     }
-    let Some(filtered) = filter(&text, product) else {
+    let Some(filtered) = filter(&text) else {
         let outcome = if text.trim().is_empty() || text.trim().eq_ignore_ascii_case("NONE") {
             "no_obvious_next_step"
         } else {
@@ -396,13 +308,12 @@ fn language_matches(reference: &str, suggestion: &str) -> bool {
     }
 }
 
-fn filter(text: &str, product: Option<&SuggestionProductContext>) -> Option<String> {
+fn filter(text: &str) -> Option<String> {
     let text = text.trim();
     if text.is_empty()
         || text.eq_ignore_ascii_case("NONE")
         || text.chars().count() > 160
         || text.starts_with(['`', '"', '“', '<'])
-        || (text.starts_with('/') && !product.is_some_and(|context| context.allows_command(text)))
         || text
             .chars()
             .any(|ch| ch.is_control() || matches!(ch, '?' | '？'))

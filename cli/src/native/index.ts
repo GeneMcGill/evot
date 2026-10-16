@@ -154,8 +154,8 @@ export class Agent {
   }
 
   /** Best-effort side request: never falls back to this agent's chat model. */
-  suggestNextPrompt(messages: { role: 'user' | 'assistant'; text: string }[], productContext?: import('./contracts/suggestion.js').SuggestionProductContext) {
-    return this.raw.suggestNextPrompt(JSON.stringify(messages), productContext ? JSON.stringify(productContext) : undefined)
+  suggestNextPrompt(messages: { role: 'user' | 'assistant'; text: string }[]) {
+    return this.raw.suggestNextPrompt(JSON.stringify(messages))
   }
 
   async createSession(): Promise<SessionMeta> {

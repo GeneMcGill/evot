@@ -1,7 +1,0 @@
-{
-  "trigger": "mode_changed",
-  "mode": "plan",
-  "state": "idle",
-  "input_behavior": "Plan without editing files.",
-  "actions": [{"text": "/done", "description": "Return to normal mode."}]
-}
