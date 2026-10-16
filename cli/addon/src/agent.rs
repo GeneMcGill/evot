@@ -674,6 +674,30 @@ impl NapiAgent {
         NapiCompaction::start(self.agent.clone(), session_id, custom_instructions)
     }
 
+    /// Start a best-effort suggestion using only the independently published
+    /// service. Context is bounded again in Rust; it never touches the run.
+    #[napi]
+    pub fn suggest_next_prompt(
+        &self,
+        context_json: String,
+        product_context_json: Option<String>,
+    ) -> Result<crate::suggestion::NapiSuggestion> {
+        if context_json.len() > 100_000 {
+            return Err(Error::from_reason("suggestion context too large"));
+        }
+        let messages = serde_json::from_str(&context_json)
+            .map_err(|_| Error::from_reason("invalid suggestion context"))?;
+        let product = match product_context_json {
+            Some(json) if json.len() <= 8_192 => Some(
+                serde_json::from_str(&json)
+                    .map_err(|_| Error::from_reason("invalid suggestion product context"))?,
+            ),
+            Some(_) => return Err(Error::from_reason("suggestion product context too large")),
+            None => None,
+        };
+        Ok(crate::suggestion::NapiSuggestion::start(messages, product))
+    }
+
     /// Send a steering message into a running session.
     #[napi]
     pub fn steer(&self, session_id: String, text: String, content_json: Option<String>) {

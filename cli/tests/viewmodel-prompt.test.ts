@@ -551,7 +551,7 @@ describe('prompt frame', () => {
     const hint = (input: Partial<PromptVMInput>) =>
       interiorRows(defaultInput(input)).map(row => stripAnsi(row).replaceAll(CURSOR_MARKER, '')).find(row => row.startsWith('❭ '))
     expect(hint({})).toBe('❭ Enter a coding task or / for commands')
-    expect(hint({ planning: true })).toBe('❭ Describe what to plan — no edits until you approve')
+    expect(hint({ planning: true })).toBe('❭ Describe what to plan · no edits · /done to return')
     // While a turn runs, typing steers it: say so, whatever mode the next turn starts in.
     expect(hint({ busy: true })).toBe('❭ Guide the agent while it works')
     expect(hint({ busy: true, planning: true })).toBe('❭ Guide the agent while it works')

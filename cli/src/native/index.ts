@@ -153,6 +153,11 @@ export class Agent {
     return { kind: 'run', stream: new QueryStream(run) }
   }
 
+  /** Best-effort side request: never falls back to this agent's chat model. */
+  suggestNextPrompt(messages: { role: 'user' | 'assistant'; text: string }[], productContext?: import('./contracts/suggestion.js').SuggestionProductContext) {
+    return this.raw.suggestNextPrompt(JSON.stringify(messages), productContext ? JSON.stringify(productContext) : undefined)
+  }
+
   async createSession(): Promise<SessionMeta> {
     const json = await this.raw.createSession()
     return decodeResult(json, results.sessionMeta)

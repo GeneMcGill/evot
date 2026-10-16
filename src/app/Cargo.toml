@@ -53,6 +53,7 @@ should_implement_trait = "allow"
 approx_constant = "allow"
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 insta = { version = "1", features = ["json", "yaml", "redactions"] }
 tower = { version = "0.5", features = ["util"] }
 wiremock = "0.6"

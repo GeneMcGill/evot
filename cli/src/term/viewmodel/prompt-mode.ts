@@ -14,6 +14,7 @@
  */
 
 import { getTheme } from '../../render/theme/index.js'
+import { MODE_HINTS } from '../app/composer-guidance.js'
 
 export type PromptMode = 'default' | 'plan' | 'log'
 
@@ -53,20 +54,17 @@ export function promptModeStyle(mode: PromptMode): PromptModeStyle {
     case 'plan':
       return {
         hex: theme.accentHex,
-        hint: 'Describe what to plan — no edits until you approve',
-        shortHint: 'Describe what to plan',
+        ...MODE_HINTS.plan,
       }
     case 'log':
       return {
         hex: theme.accentHex,
-        hint: 'Ask about the captured log',
-        shortHint: 'Ask about the log',
+        ...MODE_HINTS.log,
       }
     default:
       return {
         hex: theme.brandHex,
-        hint: 'Enter a coding task or / for commands',
-        shortHint: 'Enter a coding task',
+        ...MODE_HINTS.normal,
       }
   }
 }

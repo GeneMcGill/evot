@@ -227,6 +227,25 @@ describe('isEditorEmpty', () => {
 })
 
 describe('renderPrompt', () => {
+  test('suggestion replaces only the idle empty placeholder, never the draft', () => {
+    const render = (extra: Partial<PromptVMInput>) => blocksToLines(buildPromptBlocks(defaultPromptVM({
+      suggestion: '\u8fd0\u884c\u5b9a\u5411\u6d4b\u8bd5', ...extra,
+    }))).join('\n')
+    expect(render({})).toContain('\u8fd0\u884c\u5b9a\u5411\u6d4b\u8bd5')
+    expect(render({})).toContain('⇥ / →')
+    expect(render({ busy: true })).not.toContain('\u8fd0\u884c\u5b9a\u5411\u6d4b\u8bd5')
+    expect(render({ active: false })).not.toContain('\u8fd0\u884c\u5b9a\u5411\u6d4b\u8bd5')
+    expect(render({ logMode: true })).not.toContain('\u8fd0\u884c\u5b9a\u5411\u6d4b\u8bd5')
+    expect(render({ lines: ['draft'], cursorCol: 5, placeholder: false })).not.toContain('\u8fd0\u884c\u5b9a\u5411\u6d4b\u8bd5')
+  })
+
+  test('long suggestions retain both acceptance key hints on narrow terminals', () => {
+    const output = blocksToLines(buildPromptBlocks(defaultPromptVM({
+      columns: 40, suggestion: 'Run the targeted tests and review the results '.repeat(4),
+    }))).join('\n')
+    expect(output).toContain('⇥ / →')
+  })
+
   test('returns array of strings', () => {
     const lines = blocksToLines(buildPromptBlocks(defaultPromptVM()))
     expect(Array.isArray(lines)).toBe(true)

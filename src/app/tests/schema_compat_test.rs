@@ -73,6 +73,27 @@ fn current_reader_accepts_historical_cache_fixtures() -> TestResult {
     Ok(())
 }
 
+#[test]
+fn suggestion_service_survives_current_cache_writes_and_legacy_readers() -> TestResult {
+    let cache: auth::ModelsCache = serde_json::from_str(include_str!(
+        "fixtures/schema/models-cache-v1-suggestion.json"
+    ))?;
+    let service = evot::suggestion::SuggestionEndpoint::from_catalog(&cache.response)
+        .ok_or("missing suggestion")?;
+    assert_eq!(service.model, "example/suggestion");
+    let original_services = cache.response.extra.get("services").cloned();
+    let serialized = serde_json::to_string(&auth::ModelsCache::new(500, cache.response))?;
+    let legacy: LegacyModelsCache = serde_json::from_str(&serialized)?;
+    assert_eq!(legacy.response.providers[0].default_model, "m-one");
+    let reread: auth::ModelsCache = serde_json::from_str(&serialized)?;
+    assert_eq!(
+        reread.response.extra.get("services"),
+        original_services.as_ref()
+    );
+    assert_eq!(reread.response.providers[0].models, ["m-one"]);
+    Ok(())
+}
+
 /// The account pin is a new top-level response field: current writers emit it,
 /// strict legacy readers (which never knew it) must still load the file, and a
 /// round trip through the current client must not drop it.

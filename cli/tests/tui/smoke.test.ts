@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { smokeEnvironment, seedSmokeHome } from '../helpers/smoke-home.js'
+import { suggestionRequestContext } from '../helpers/suggestion-request.js'
 import { getTheme } from '../../src/render/theme/index.js'
 import { ScreenHarness } from '../helpers/screen.js'
 
@@ -156,11 +157,27 @@ function seedResumePreviewCacheMiss(home: string): string[] {
   return currentIds
 }
 
+function seedSuggestionService(stateHome: string, baseUrl: string): void {
+  writeFileSync(join(stateHome, 'auth.json'), JSON.stringify({
+    version: 1, server_base_url: 'http://127.0.0.1:1',
+    user: { id: 'fixture', name: 'Fixture', email: 'fixture@example.invalid' },
+    cli_token: 'fixture-token', refresh_token: 'fixture-refresh', models_synced_at: Date.now(),
+  }))
+  writeFileSync(join(stateHome, 'models.cache.json'), JSON.stringify({ schema_version: 1,
+    synced_at: Date.now(), response: { providers: [], models: [], services: { suggestion: {
+      model: 'suggestion-fixture', protocol: 'openai', base_url: baseUrl,
+      api_key: 'fixture-key', context_window: 8192,
+    } } },
+  }))
+}
+
 async function startEvot(
   seedSession = false,
   seedOtherCwd = false,
   seedPreviewCacheMiss = false,
   providerUrl?: string,
+  setup?: (stateHome: string) => void,
+  startupArgs: string[] = [],
 ): Promise<Session> {
   // Isolate HOME as well as EVOT_HOME: some TS and Rust stores use ~/.evotai.
   // This must also protect developer state when testing an older compiled binary.
@@ -179,7 +196,8 @@ async function startEvot(
     })
   }
   if (seedPreviewCacheMiss) seedResumePreviewCacheMiss(stateHome)
-  const child = spawn('python3', ['-c', PTY_RELAY, EVOT_BIN], {
+  setup?.(stateHome)
+  const child = spawn('python3', ['-c', PTY_RELAY, EVOT_BIN, ...startupArgs], {
     stdio: ['pipe', 'pipe', 'pipe'],
     env: smokeEnvironment(isolatedHome),
   })
@@ -650,6 +668,166 @@ describe.skipIf(!canRun)('evot binary smoke (PTY)', () => {
       expect(session.historyEntries()).toEqual(['echo smoke test'])
     } finally {
       await session.kill()
+    }
+  }, 60_000)
+
+  test.each([['Tab', '\t'], ['Right Arrow', '\x1b[C']] as const)(
+    'published suggestion survives gateway latency, renders, and %s only fills the editor', async (_key, input) => {
+    let chatRequests = 0
+    let suggestionRequests = 0
+    const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: async request => {
+      const body = await request.json() as { model: string; max_tokens: number }
+      const suggesting = body.model === 'suggestion-fixture'
+      if (suggesting) {
+        suggestionRequests++
+        expect(body.max_tokens).toBe(32)
+        await Bun.sleep(1600)
+      } else {
+        chatRequests++
+      }
+      const chunk = { id: 'fixture', model: body.model, choices: [{ index: 0,
+        delta: { role: 'assistant', content: suggesting ? 'Run the targeted tests' : 'The implementation is ready.' },
+        finish_reason: 'stop',
+      }] }
+      return new Response(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`, {
+        headers: { 'content-type': 'text/event-stream' },
+      })
+    } })
+    let session: Session | undefined
+    try {
+      const baseUrl = `http://127.0.0.1:${server.port}/v1`
+      session = await startEvot(false, false, false, baseUrl, stateHome => seedSuggestionService(stateHome, baseUrl))
+      session.write('Implement the requested change\x0d')
+      await session.waitFor('The implementation is ready.')
+      await session.waitForScreen(/Run the targeted tests\s+⇥/)
+      expect(suggestionRequests).toBe(1)
+      const beforeAccept = chatRequests
+      session.write(input)
+      const screen = await session.waitForScreen(/^(?![\s\S]*⇥)[\s\S]*Run the targeted tests/)
+      expect(screen).not.toContain('⇥')
+      expect(chatRequests).toBe(beforeAccept)
+      // Once accepted, Right is ordinary cursor motion again, not a second
+      // acceptance or submission; typing continues to edit the same draft.
+      session.write('\x1b[D\x1b[C!')
+      await session.waitForScreen(/Run the targeted tests!/)
+      expect(chatRequests).toBe(beforeAccept)
+      expect(session.historyEntries()).toEqual(['Implement the requested change'])
+    } finally {
+      if (session) await session.kill()
+      await server.stop(true)
+    }
+  }, 60_000)
+
+  test('resume and plan transitions sample once with product facts and keep operation guidance visible', async () => {
+    const contexts: { trigger: string; mode: string; actions: { text: string }[] }[] = []
+    const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: async request => {
+      const body = await request.json() as { model: string; messages: { content: string }[] }
+      expect(body.model).toBe('suggestion-fixture')
+      const context = suggestionRequestContext(body).product_context!
+      contexts.push(context)
+      const text = context.mode === 'plan' ? '/done' : 'Continue the login tests'
+      const chunk = { id: 'fixture', model: body.model, choices: [{ index: 0,
+        delta: { role: 'assistant', content: text }, finish_reason: 'stop' }] }
+      return new Response(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`, { headers: { 'content-type': 'text/event-stream' } })
+    } })
+    let session: Session | undefined
+    try {
+      const base = `http://127.0.0.1:${server.port}/v1`
+      session = await startEvot(true, false, false, base, home => seedSuggestionService(home, base))
+      session.write(`/resume ${SEEDED_SESSION_ID}\x0d`)
+      await session.waitForScreen(/Continue the login tests\s+⇥/)
+      expect(contexts.map(context => context.trigger)).toEqual(['resume'])
+      session.write('/plan\x0d')
+      const screen = await session.waitForScreen(/\/done\s+⇥/)
+      expect(screen).toContain('no edits')
+      expect(contexts.at(-1)?.mode).toBe('plan')
+      expect(contexts.at(-1)?.actions.some(action => action.text === '/done')).toBe(true)
+      session.write('/done\x0d')
+      await session.waitForScreen(/Continue the login tests\s+⇥/)
+      expect(contexts.map(context => context.trigger)).toEqual(['resume', 'mode_changed', 'mode_changed'])
+      expect(contexts.at(-1)?.mode).toBe('normal')
+      session.write('\x1b')
+      await session.waitForScreen(/Enter a coding task/)
+      expect(contexts).toHaveLength(3)
+    } finally {
+      if (session) await session.kill()
+      await server.stop(true)
+    }
+  }, 60_000)
+
+  test('startup resume produces one suggestion without a new turn', async () => {
+    let requests = 0
+    const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: async request => {
+      const body = await request.json() as { model: string; messages: { content: string }[] }
+      expect(body.model).toBe('suggestion-fixture')
+      const context = suggestionRequestContext(body)
+      expect(context.product_context?.trigger).toBe('resume')
+      expect(context.original_task).toBe('smoke resume prompt')
+      expect(body.messages.slice(0, -1).every(message => !message.content.includes('smoke resume prompt'))).toBe(true)
+      requests++
+      const chunk = { id: 'fixture', model: body.model, choices: [{ index: 0,
+        delta: { role: 'assistant', content: 'Continue the login tests' }, finish_reason: 'stop' }] }
+      return new Response(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`, { headers: { 'content-type': 'text/event-stream' } })
+    } })
+    let session: Session | undefined
+    try {
+      const base = `http://127.0.0.1:${server.port}/v1`
+      session = await startEvot(true, false, false, base, home => {
+        seedSuggestionService(home, base)
+        const path = join(home, 'sessions', SEEDED_SESSION_ID, 'transcript.jsonl')
+        const original = JSON.parse(readFileSync(path, 'utf8').trim()) as Record<string, unknown>[]
+        const followups = Array.from({ length: 100 }, (_, index) => ({
+          session_id: SEEDED_SESSION_ID, run_id: null, seq: index + 2, turn: index + 2,
+          item: { type: 'user', text: `Recent refinement ${index}`, content: [] }, created_at: new Date().toISOString(),
+        }))
+        writeFileSync(path, `${JSON.stringify([...original, ...followups])}\n`)
+      }, ['--resume', SEEDED_SESSION_ID])
+      await session.waitForScreen(/Continue the login tests\s+⇥/)
+      expect(requests).toBe(1)
+    } finally {
+      if (session) await session.kill()
+      await server.stop(true)
+    }
+  }, 60_000)
+
+  test('loop waiting samples once, allows a registered command, and preserves stop guidance', async () => {
+    let suggestions = 0
+    let foreground = 0
+    const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: async request => {
+      const body = await request.json() as { model: string; messages: { content: string }[] }
+      const suggesting = body.model === 'suggestion-fixture'
+      let delta: Record<string, unknown>
+      if (suggesting) {
+        suggestions++
+        const context = suggestionRequestContext(body).product_context!
+        expect(context.trigger).toBe('loop_waiting')
+        expect(context.state).toBe('waiting-loop')
+        expect(context.actions.some((action: { text: string }) => action.text === '/loop 15m')).toBe(true)
+        delta = { role: 'assistant', content: '/loop 15m' }
+      } else {
+        foreground++
+        delta = { role: 'assistant', content: 'Waiting for the next check.', tool_calls: [{ index: 0, id: 'schedule-1', type: 'function',
+          function: { name: 'schedule_wakeup', arguments: JSON.stringify({ delay_seconds: 900, reason: 'Wait for the next check.' }) } }] }
+      }
+      const chunk = { id: 'fixture', model: body.model, choices: [{ index: 0, delta, finish_reason: suggesting ? 'stop' : 'tool_calls' }] }
+      return new Response(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`, { headers: { 'content-type': 'text/event-stream' } })
+    } })
+    let session: Session | undefined
+    try {
+      const base = `http://127.0.0.1:${server.port}/v1`
+      session = await startEvot(false, false, false, base, home => seedSuggestionService(home, base))
+      session.write('/loop 15m check the login tests\x0d')
+      const screen = await session.waitForScreen(/\/loop 15m\s+⇥/)
+      expect(screen).toContain('esc twice to stop')
+      const before = foreground
+      session.write('\t')
+      await session.waitForScreen(/^(?![\s\S]*⇥)[\s\S]*\/loop 15m/)
+      expect(foreground).toBe(before)
+      expect(suggestions).toBe(1)
+      expect(session.historyEntries()).toEqual(['/loop 15m check the login tests'])
+    } finally {
+      if (session) await session.kill()
+      await server.stop(true)
     }
   }, 60_000)
 

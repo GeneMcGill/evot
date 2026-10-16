@@ -25,7 +25,10 @@ describe('repl resume helpers', () => {
     return { ...session, search_text: '', user_prompts: [], ...overrides }
   }
 
-  test('isSessionIdPrefix accepts hex prefix only', () => {
+  test('isSessionIdPrefix accepts hex prefixes and full UUIDs without routing them through search', () => {
+    expect(isSessionIdPrefix('018f0000-0000-7000-8000-000000000001')).toBe(true)
+    expect(isSessionIdPrefix('018F0000-0000-7000-8000-000000000001')).toBe(true)
+    expect(isSessionIdPrefix('018f0000-0000-not-a-session')).toBe(false)
     expect(isSessionIdPrefix('abc123')).toBe(true)
     expect(isSessionIdPrefix('ABCDEF')).toBe(true)
     expect(isSessionIdPrefix('not-hex')).toBe(false)

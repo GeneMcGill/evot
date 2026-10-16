@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "synced_at": 456,
+  "response": {
+    "version": 12,
+    "default_model": "m-one",
+    "providers": [
+      {
+        "name": "evot-free", "label": "Evot Free", "sort_order": 0,
+        "protocol": "anthropic", "base_url": "https://example.invalid/v1/llm",
+        "api_key": "evot.fixture.key", "default_model": "m-one", "models": ["m-one"]
+      }
+    ],
+    "models": [{"id": "m-one", "protocol": "anthropic", "tier": "base", "provider": "evot-free"}],
+    "services": {
+      "suggestion": {
+        "model": "example/suggestion", "protocol": "openai",
+        "base_url": "https://example.invalid/v1/llm", "api_key": "evot.fixture.key",
+        "context_window": 8192, "future_setting": "preserve"
+      },
+      "future_service": {"enabled": true}
+    },
+    "notices": []
+  }
+}

@@ -10,13 +10,15 @@
 
 import stringWidth from 'string-width'
 import { confirmationHint } from './confirmation-hint.js'
+import { resolveComposerGuidance, type ComposerGuidance } from '../app/composer-guidance.js'
+import { resolveRunInteraction } from '../app/run-interaction.js'
 import { COMMANDS, HIDDEN_COMMANDS } from '../../commands/index.js'
 import { getTheme } from '../../render/theme/index.js'
 import type { CompletionMenu } from '../input/editor.js'
 import { CURSOR_MARKER } from '../render-frame.js'
 import { atLeastHeight, atLeastWidth, heightTier, widthTier } from './breakpoints.js'
 import { createFrame, type RuleLabels } from './frame.js'
-import { promptMode, promptModeLabels, promptModeStyle, type PromptModeStyle } from './prompt-mode.js'
+import { promptMode, promptModeLabels, promptModeStyle } from './prompt-mode.js'
 import { buildPromptFooterBlocks, type PromptFooterVM } from './prompt-footer.js'
 import { rowMarker } from './selector-row.js'
 import { line, block, plain, dim, type ViewBlock, type StyledLine, type StyledSpan } from './types.js'
@@ -29,6 +31,8 @@ export interface PromptVMInput extends PromptFooterVM {
   active: boolean
   completion: CompletionMenu | null
   ghostHint: string
+  suggestion?: string
+  guidance?: ComposerGuidance
   rows: number
   placeholder: boolean
   exitHint: boolean
@@ -103,17 +107,16 @@ function topLabels(modes: string[], modeHex: string, overflow: string | undefine
  * useful thing to know is that typing steers it, not which mode the next turn
  * will start in.
  */
-function placeholderHint(input: PromptVMInput, mode: PromptModeStyle, wide: boolean): string {
-  const queued = input.queuedCount ?? 0
-  if (input.busy && queued > 0) {
-    const noun = queued === 1 ? 'message' : 'messages'
-    return wide ? `${queued} ${noun} queued · Ctrl+G to manage` : `${queued} queued · Ctrl+G`
-  }
-  if (input.busy) return wide ? 'Guide the agent while it works' : 'Guide while it works'
-  if (input.loopParked) {
-    return wide ? 'Loop waiting · type to act now · /loop 15m to change pace · esc twice to stop' : 'Loop waiting · type · /loop 15m · esc twice'
-  }
-  return wide ? mode.hint : mode.shortHint
+function composerGuidance(input: PromptVMInput): ComposerGuidance {
+  return input.guidance ?? resolveComposerGuidance({
+    interaction: resolveRunInteraction({ active: input.busy ?? false, owner: null, loopParked: input.loopParked }),
+    mode: input.logMode ? 'log' : input.planning ? 'plan' : 'normal',
+    queuedCount: input.queuedCount,
+  })
+}
+
+function visibleSuggestion(input: PromptVMInput): string {
+  return input.active && input.placeholder && !input.completion && composerGuidance(input).allowSuggestion ? input.suggestion ?? '' : ''
 }
 
 export function buildPromptBlocks(input: PromptVMInput, options: PromptLayoutOptions = {}): ViewBlock[] {
@@ -123,7 +126,7 @@ export function buildPromptBlocks(input: PromptVMInput, options: PromptLayoutOpt
   const modeLabels = promptModeLabels(input)
   const frame = createFrame(columns, { rows })
 
-  const visual = buildInputLines(input, frame.contentWidth, columns, mode)
+  const visual = buildInputLines(input, frame.contentWidth, columns)
   const maxInputRows = Math.max(MAX_INPUT_ROWS_FLOOR, Math.floor(rows * MAX_INPUT_ROWS_RATIO))
   const start = Math.max(0, Math.min(visual.cursorIndex - maxInputRows + 1, visual.lines.length - maxInputRows))
   const end = Math.min(visual.lines.length, start + maxInputRows)
@@ -137,6 +140,7 @@ export function buildPromptBlocks(input: PromptVMInput, options: PromptLayoutOpt
     - (frame.framed ? 1 : 0)
     - (input.exitHint ? 1 : 0)
     - (input.backgroundProcessCount > 0 ? 1 : 0)
+    - (visibleSuggestion(input) && composerGuidance(input).operationHint ? 1 : 0)
     - 2) // repository footer + trailing blank; background status is budgeted above
   const completionLines = buildCompletionLines(
     input.completion,
@@ -183,6 +187,9 @@ export function buildPromptBlocks(input: PromptVMInput, options: PromptLayoutOpt
   if (input.exitHint) blocks.push(block([line(confirmationHint(truncateToWidth('  Press Ctrl+C again to exit', columns), true))]))
   // The border label carries the mode whenever it is drawn, so the footer only
   // repeats it on terminals too short for a border.
+  if (visibleSuggestion(input) && composerGuidance(input).operationHint) {
+    blocks.push(block([line(dim(truncateToWidth(`  ${composerGuidance(input).operationHint}`, columns)))]))
+  }
   blocks.push(...buildPromptFooterBlocks(input, { modeShownAbove: frame.ruled }))
   return blocks
 }
@@ -192,7 +199,6 @@ function buildInputLines(
   input: PromptVMInput,
   contentWidth: number,
   columns: number,
-  mode: PromptModeStyle,
 ): { lines: StyledLine[]; cursorIndex: number } {
   const lines: StyledLine[] = []
   // No prompt prefix any more, so text gets the full content width. When the
@@ -207,7 +213,12 @@ function buildInputLines(
     if (active && text === '' && input.lines.length === 1 && input.placeholder) {
       cursorIndex = lines.length
       // The native cursor sits on the first hint cell without inserting text.
-      const full = placeholderHint(input, mode, atLeastWidth(widthTier(columns), 'md'))
+      const guidance = composerGuidance(input)
+      const suggestion = visibleSuggestion(input)
+      const acceptHint = '  ⇥ / →'
+      const full = suggestion
+        ? `${truncateToWidth(suggestion, Math.max(0, contentWidth - stringWidth(acceptHint)))}${acceptHint}`
+        : atLeastWidth(widthTier(columns), 'md') ? guidance.placeholder : guidance.shortPlaceholder
       const hint = truncateToWidth(full, contentWidth)
       lines.push(line(plain(CURSOR_MARKER), ...(hint ? [dim(hint)] : [])))
       continue

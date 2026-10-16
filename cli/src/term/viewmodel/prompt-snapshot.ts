@@ -4,6 +4,8 @@ import { providerDisplayName } from '../app/provider.js'
 import { shouldDownOpenPanel } from '../app/background-panel.js'
 import { isEditorEmpty, type EditorState } from '../input/editor.js'
 import type { PromptVMInput } from './prompt.js'
+import { resolveComposerGuidance } from '../app/composer-guidance.js'
+import { resolveRunInteraction, type RunInteractionState } from '../app/run-interaction.js'
 
 export interface PromptSnapshot {
   editor: EditorState
@@ -22,6 +24,9 @@ export interface PromptSnapshot {
   backgroundStopPending?: boolean
   /** A turn is streaming: the empty composer says typing steers it. */
   busy?: boolean
+  /** Model suggestion is separate from slash-command ghost hints. */
+  suggestion?: string
+  interaction?: RunInteractionState
   /** A `/loop` is parked between ticks. */
   loopParked?: boolean
   /** Prompts queued behind the running turn. */
@@ -61,6 +66,12 @@ export function promptFromSnapshot(input: PromptSnapshot): PromptVMInput {
     backgroundStopPending: input.backgroundStopPending,
     backgroundPanelDownAvailable: shouldDownOpenPanel({ editorEmpty: empty, running: input.backgroundProcessCount }),
     busy: input.busy ?? false,
+    guidance: resolveComposerGuidance({
+      interaction: input.interaction ?? resolveRunInteraction({ active: input.busy ?? false, owner: null, loopParked: input.loopParked }),
+      mode: input.logMode ? 'log' : input.planning ? 'plan' : 'normal',
+      queuedCount: input.queuedCount,
+    }),
+    ...(input.suggestion ? { suggestion: input.suggestion } : {}),
     loopParked: input.loopParked ?? false,
     queuedCount: input.queuedCount ?? 0,
     thinkingLevel: config?.thinkingLevel ?? '',

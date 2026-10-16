@@ -88,6 +88,7 @@ export function normalizeResumeQuery(value: string): string {
 
 export function isSessionIdPrefix(value: string): boolean {
   return /^[0-9a-f]{1,36}$/i.test(value)
+    || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
 }
 
 export function resolveSessionByPrefix(sessions: SessionMeta[], prefix: string): SessionPrefixResolution {

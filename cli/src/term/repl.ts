@@ -98,6 +98,9 @@ import {
 import { handleSlashCommand } from './app/commands.js'
 import { askStateToResponse, prefixedAskLines } from './app/ask-user.js'
 import { RunOwnership } from './app/run-ownership.js'
+import { PromptSuggestion, isSuggestionBoundary, suggestionHistoryFromLines } from './app/suggestion.js'
+import { SuggestionGoal } from './app/suggestion-goal.js'
+import { resolveComposerGuidance, suggestionProductContext, allowedSuggestionCommand, type SuggestionTrigger } from './app/composer-guidance.js'
 import {
   composeExtensions,
   dispatchHostToolCall,
@@ -142,7 +145,7 @@ import { ShareSelector } from './app/share-selector.js'
 import { openWebLink } from './open-link.js'
 import { AuthWatcher } from './app/auth-watch.js'
 import { AuthIdentityTracker } from './app/auth-identity.js'
-import { RunInteraction, type RunInteractionInput } from './app/run-interaction.js'
+import { RunInteraction, resolveRunInteraction, type RunInteractionInput } from './app/run-interaction.js'
 import { ManualCompaction } from './app/manual-compaction.js'
 import { busySubmissionAction } from './app/busy-submission.js'
 import { PendingImages } from './app/pending-images.js'
@@ -305,9 +308,13 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
   let runStartedAt: number | null = null
   let runTurnCount = 0
   const runThinking = new RunThinking()
-  const beginRun = (): number => runOwnership.begin()
+  const beginRun = (): number => {
+    suggestions.cancel()
+    return runOwnership.begin()
+  }
   const ownsRun = (generation: number): boolean => runOwnership.owns(generation)
   const revokeRun = (): void => {
+    suggestions.cancel()
     runOwnership.revoke()
     taskSession.cancelSetup()
   }
@@ -345,7 +352,9 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
     notify: text => commitSystem('sys-loop', `  ${text}`),
     requestRender: () => renderer.requestRender(),
     waitingChanged: waiting => {
+      suggestions.cancel()
       if (isLoading) return
+      if (waiting) requestProductSuggestion('loop_waiting')
       sessionHook.state(waiting ? 'working' : 'idle')
       setTerminalTitle(idleWaitTitle())
     },
@@ -463,6 +472,50 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
     requestRender: () => renderer.requestRender(),
   }
   let destroyed = false
+  const suggestionGoal = new SuggestionGoal()
+  let composerRevision = 0
+  let suggestionsReady = false
+  let startupSuggestion: SuggestionTrigger | null = null
+  function composerPolicy(trigger?: SuggestionTrigger) {
+    const facts = runInteractionInput()
+    const interaction = runInteraction.snapshot(facts)
+    // Start sampling at the authoritative final-answer boundary, while only
+    // run teardown remains. Reuse the interaction resolver so parked loops
+    // and background tasks keep their real idle-side capabilities.
+    const projected = trigger === 'answer' && interaction.kind === 'active'
+      ? resolveRunInteraction({ ...facts, active: false, loopParked: loopSession.waiting }) : interaction
+    return resolveComposerGuidance({ interaction: projected,
+      mode: logMode ? 'log' : planning ? 'plan' : 'normal',
+      queuedCount: queuedUserMessages.length + queuedCompactionSubmissions.length })
+  }
+  function suggestionInputReady(): boolean {
+    return suggestionsReady && !destroyed && overlay.kind === 'none' && !commandWindowPreview
+      && isEditorEmpty(editor) && !editor.completion && pastedImages.size === 0 && pendingImages.size === 0
+      && queuedUserMessages.length === 0 && queuedCompactionSubmissions.length === 0
+  }
+  function requestProductSuggestion(trigger: SuggestionTrigger): void {
+    if (!suggestionsReady) { startupSuggestion = trigger; return }
+    suggestions.start(suggestionHistoryFromLines(compactLines), trigger)
+  }
+  const suggestions = new PromptSuggestion({
+    key: () => `${sessionId ?? ''}:${runOwnership.owner}:${composerRevision}:${planning}:${!!logMode}:${loopSession.snapshot?.startedAt ?? ''}`,
+    eligible: () => suggestionInputReady() && composerPolicy().allowSuggestion,
+    canSample: trigger => suggestionInputReady() && (!loopSession.active || loopSession.waiting)
+      && composerPolicy(trigger).allowSuggestion,
+    productContext: trigger => {
+      const context = suggestionProductContext(composerPolicy(trigger), trigger)
+      if (suggestionGoal.value()) context.original_task = suggestionGoal.value()
+      const loop = loopSession.snapshot
+      if (context.state === 'waiting-loop' && loop) {
+        context.input_behavior += ` Current loop task: ${loop.task.label.slice(0, 80)}. Latest status: ${loop.reason?.slice(0, 120) ?? 'waiting'}.`
+      }
+      return context
+    },
+    allowsCommand: text => allowedSuggestionCommand(text, composerPolicy().actions),
+    start: (messages, context) => agent.suggestNextPrompt(messages, context),
+    changed: () => renderer.requestRender(),
+  })
+  resources.add(() => suggestions.cancel())
   let disableRaw: (() => void) | null = null
   let enhancedKeyboard: EnhancedKeyboardSession | null = null
   let inputBuffer: TerminalInputBuffer | null = null
@@ -622,7 +675,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
     const choice = answers[0]!.answer
     if (choice === 'Execute the plan') {
       planning = false
-      commitSystem('sys-plan-exec', '  planning: off · executing plan')
+      commitSystem('sys-plan-exec', '  plan mode: off · executing plan')
       const remaining = planModeItems
         .map(item => `${item.step}. ${item.text}`)
         .join('\n')
@@ -636,14 +689,15 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
     }
 
     if (choice === 'Stay in plan mode' || choice === 'Skipped') {
-      commitSystem('sys-plan-stay', '  planning: on · staying in plan mode')
+      commitSystem('sys-plan-stay', '  plan mode: on · no edits · /done to return')
+      requestProductSuggestion('mode_changed')
       renderer.requestRender()
       return
     }
 
     if (choice === 'Refine the plan') {
       editor = insertText(clearEditor(editor), 'Refine the plan: ')
-      commitSystem('sys-plan-refine', '  planning: on · enter refinement feedback')
+      commitSystem('sys-plan-refine', '  plan mode: on · enter refinement feedback')
       renderer.requestRender()
       return
     }
@@ -1587,6 +1641,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
   renderer.requestRender()
 
   function getPromptVM(): PromptVMInput {
+    suggestions.reconcile()
     const interaction = runInteraction.snapshot(runInteractionInput())
     // While a loop is parked, Esc stops the loop (the placeholder says so),
     // so the chip must not advertise a second meaning for the same key.
@@ -1612,6 +1667,8 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
       backgroundStopHint,
       backgroundStopPending: interaction.interruptPending,
       busy: isLoading,
+      interaction,
+      suggestion: suggestions.text(),
       loopParked,
       queuedCount: queuedUserMessages.length + queuedCompactionSubmissions.length,
     })
@@ -1934,6 +1991,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
   }
 
   function commitLines(outputLines: OutputLine[]) {
+    if (!logMode) for (const row of outputLines) if (row.kind === 'user') suggestionGoal.observe(row.text)
     committer.commit(outputLines)
   }
 
@@ -2079,6 +2137,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
   async function refreshForkTrail(id: string): Promise<SessionMeta[]> {
     let lineage: SessionMeta[] = []
     try { lineage = await agent.sessionLineage(id) } catch {}
+    if (sessionId !== id) return lineage
     lastLineage = lineage
     setGhostHintContext({ forked: lineage.length > 1 })
     const cloud = lineage.find(meta => meta.session_id === id)?.cloud
@@ -2116,11 +2175,14 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
   }
 
   async function resumeSession(session: SessionMeta, notice?: OutputLine[]) {
+    const revision = ++composerRevision
+    suggestions.cancel()
     taskSession.cancelFlow()
     loopSession.reset()
     try {
       const cloudNotice = await pullBeforeResume(session.session_id)
       const { transcript, model, provider, thinkingLevel, cwd: sessionCwd } = await prepareResume(agent, session)
+      if (revision !== composerRevision || destroyed) return
 
       // Restore model selection from current config, then the session's
       // recorded thinking level (session wins over the config default).
@@ -2136,6 +2198,8 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
       const { messagesToOutputLines } = await import('../render/output.js')
       const { transcriptToMessages } = await import('../session/transcript.js')
       const messages = transcriptToMessages(transcript)
+      // Capture the first real user request before selecting the painted tail.
+      suggestionGoal.restore(messages)
       // A resumed session starts with no active plan; plan mode is re-entered
       // via /plan on the live conversation.
       planModeItems = []
@@ -2159,6 +2223,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
         ...cloudNotice,
       ])
       await refreshForkTrail(session.session_id)
+      if (revision !== composerRevision || destroyed) return
       if (sessionCwd && sessionCwd !== agent.cwd) {
         restoreLines([{
           id: 'sys-resume-cwd',
@@ -2169,6 +2234,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
       if (modelRestoreNote) {
         restoreLines([{ id: 'sys-resume-model', kind: 'system', text: chalk.dim(modelRestoreNote) }])
       }
+      if (revision === composerRevision) requestProductSuggestion('resume')
     } catch (err) {
       commitSystem('sys-err', `Failed to resume: ${errorText(err)}`, 'error')
     }
@@ -2208,6 +2274,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
     const submissions = queuedCompactionSubmissions
     queuedCompactionSubmissions = []
     for (const submission of submissions) {
+      suggestionGoal.observe(submission.expandedText)
       commitLines(buildUserMessage(submission.displayText))
       await runQuery(submission.expandedText, submission.contentJson)
     }
@@ -2408,6 +2475,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
     // Notification-only wakeups continue the same user task; don't hide its
     // newly completed background work when the engine reads the result.
     if (text || contentJson || prebuiltStream) backgroundTerminals.beginRun()
+    composerRevision++
     const generation = beginRun()
     runStartedAt = Date.now()
     runTurnCount = 0
@@ -2445,6 +2513,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
         if (!streamMachine) break
 
         if (isHostToolEvent(event)) {
+          suggestions.cancel()
           const response = await dispatchHostToolCall(
             event.payload,
             collectAskUserAnswers,
@@ -2480,6 +2549,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
         streamMachine = update.state
         appState = update.state.appState
         spinnerState = update.state.spinnerState
+        if (['turn_started', 'error', 'llm_call_retry', 'quota_waiting', 'outage_waiting', 'context_compaction_started'].includes(event.kind)) suggestions.cancel()
         if (update.sessionRevoked) handleCloudSessionRevoked()
         shareNotices.record(sessionId, update.noticeLines)
 
@@ -2503,6 +2573,8 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
             committer.commitDual(update.commitLines, update.commitLines)
           }
         }
+
+        if (isSuggestionBoundary(event)) requestProductSuggestion('answer')
 
         // Reconcile against the native queue instead of draining the visible
         // copy wholesale: OneAtATime mode may consume only the first of several
@@ -2561,6 +2633,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
         isLoading = false
         streamMachine = null
         stopSpinner()
+        if (!completed) suggestions.cancel()
         if (loopRun) loopSession.endRun(completed ? 'ok' : 'error')
         commitRunFooter()
         if (taskSession.unfinishedFlow(hostToolExtension)) {
@@ -2585,6 +2658,16 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
   }
 
   function handleKey(event: KeyEvent) {
+    // Tab/Right fill the editor, never submit. Eligibility requires an empty
+    // focused composer with no menu; otherwise preserve completion/cursor keys.
+    // All other input cancels before asynchronous key handling.
+    if ((event.type === 'tab' || event.type === 'right') && suggestions.text()) {
+      const text = suggestions.take()
+      mutateEditor(state => insertText(state, text))
+      renderer.requestRender()
+      return
+    }
+    suggestions.cancel()
     if (event.type !== 'escape' || overlay.kind !== 'none' || editor.completion || queueEdit.editingEntry()) {
       runInteraction.clear()
     }
@@ -2790,8 +2873,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
         return true
       }
       case 'exit-log-mode':
-        logMode = null
-        commitSystem('sys-log-exit', '  [log mode] exited')
+        leaveSpecialMode()
         renderer.requestRender()
         return true
       case 'selector-key':
@@ -3136,6 +3218,8 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
             // In log mode, send to forked agent
             runLogQuery(logMode, expandedText)
           } else {
+            // Preserve the actual request, not a folded paste placeholder.
+            suggestionGoal.observe(expandedText)
             commitLines(buildUserMessage(displayText))
             // If the model stopped the task edit with a plain-text question,
             // the next reply is still in that edit flow, not a normal coding
@@ -3308,6 +3392,24 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
     }
   }
 
+  function leaveSpecialMode(): void {
+    if (!logMode && !planning) {
+      commitSystem('sys-mode', '  already in normal conversation mode')
+      return
+    }
+    composerRevision++
+    suggestions.cancel()
+    if (logMode) {
+      logMode = null
+      commitSystem('sys-log-exit', planning ? '  log mode: off · returned to plan mode · no edits' : '  log mode: off · normal conversation')
+    } else {
+      planning = false
+      planModeItems = []
+      commitSystem('sys-act', '  plan mode: off · normal conversation')
+    }
+    requestProductSuggestion('mode_changed')
+  }
+
   async function handleSlashInput(text: string) {
     const pendingCommand = resolveCommand(text)
     if (pendingCommand.kind === 'resolved' && backgroundTerminals.guardSessionSwitch(pendingCommand.name)) {
@@ -3344,6 +3446,9 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
     planning = result.planning
     if (result.overlay) overlay = result.overlay
     if (result.clearContext) {
+      suggestionGoal.reset()
+      composerRevision++
+      suggestions.cancel()
       taskSession.cancelFlow()
       loopSession.reset()
       // Abort any in-flight streaming and clear local context view without switching sessions.
@@ -3372,6 +3477,9 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
       resumeCache.replace(preloadedSessions)
     }
     if (result.newSession) {
+      suggestionGoal.reset()
+      composerRevision++
+      suggestions.cancel()
       taskSession.cancelFlow()
       loopSession.reset()
       // Abort any in-flight streaming.
@@ -3421,6 +3529,9 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
     }
 
     if (name === '/plan') {
+      composerRevision++
+      suggestions.cancel()
+      requestProductSuggestion('mode_changed')
       planModeItems = []
       lastReviewedPlanMarkdown = ''
       renderer.requestRender()
@@ -3533,14 +3644,7 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
         }
       }
     } else if (name === '/done') {
-      if (logMode) {
-        logMode = null
-        commitSystem('sys-log-exit', '  [log mode] exited')
-      } else {
-        planning = false
-        planModeItems = []
-        commitSystem('sys-act', '  planning: off')
-      }
+      leaveSpecialMode()
     } else if (name === '/_mem') {
       commitSystem('sys-mem', `  ${memoryLine()}`)
     } else if (name === '/_dump') {
@@ -4020,7 +4124,9 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
       try {
         const forked = agent.fork(systemPrompt)
         logMode = forked
-        commitSystem('sys-log-mode', `  [log mode] analyzing: ${logPath}\n  not persisted. press Esc to exit.`)
+        composerRevision++
+        suggestions.cancel()
+        commitSystem('sys-log-mode', `  log mode: on · read-only · /done or esc to return\n  analyzing: ${logPath} · not persisted`)
         renderer.requestRender()
         await runLogQuery(forked, query)
       } catch (err) {
@@ -4445,6 +4551,8 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
   process.stdout.write('\x1b]11;?\x07\x1b[?996n\x1b[?2031h')
 
   process.stdout.write('\x1b[?2004h')
+  suggestionsReady = true
+  if (startupSuggestion) { const trigger = startupSuggestion; startupSuggestion = null; requestProductSuggestion(trigger) }
   renderer.requestRender()
 
   function cleanup() {
