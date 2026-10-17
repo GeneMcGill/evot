@@ -59,9 +59,27 @@ pub struct StreamConfig {
     pub cache_config: CacheConfig,
     /// Optional key for provider-side prompt cache routing.
     pub prompt_cache_key: Option<String>,
+    /// Optional dedicated HTTP client.
+    ///
+    /// `None` uses the process-wide shared client, which is right for the
+    /// application: one connection pool against a stable set of origins. Tests
+    /// that point providers at many short-lived mock servers must set their
+    /// own: a pooled keep-alive connection belonging to an origin that has
+    /// since been recycled onto the same port can hand one server's response to
+    /// another server's request.
+    pub client: Option<reqwest::Client>,
 }
 
 impl StreamConfig {
+    /// The client for this request: the dedicated one when set, otherwise the
+    /// shared process client.
+    pub fn http_client(&self) -> Result<reqwest::Client, crate::provider::ProviderError> {
+        match &self.client {
+            Some(client) => Ok(client.clone()),
+            None => crate::provider::error::new_client(),
+        }
+    }
+
     /// Caller output cap before applying the model's independent output limit.
     pub fn requested_max_tokens(&self) -> u32 {
         self.max_tokens

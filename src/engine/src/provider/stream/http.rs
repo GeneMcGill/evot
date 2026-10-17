@@ -100,7 +100,12 @@ pub fn learn_request_encoding(url: &str, response: &reqwest::Response) {
     }
 }
 
-fn forget_request_encoding(url: &str) {
+/// Forget what *url*'s origin advertised about request encodings.
+///
+/// The cache is process-wide and keyed by origin, so a fresh server that reuses
+/// a previously seen host:port would otherwise inherit stale knowledge. Tests
+/// call this for their own origin before asserting on what gets sent.
+pub fn forget_request_encoding(url: &str) {
     if let Some(origin) = origin_of(url) {
         gzip_origins().lock().remove(&origin);
     }
@@ -194,17 +199,39 @@ pub async fn send_json_stream_request(
 pub async fn send_stream_request(
     builder: reqwest::RequestBuilder,
 ) -> Result<reqwest::Response, ProviderError> {
+    send_stream_request_with_deadline(builder, crate::provider::error::STREAM_SEND_TIMEOUT).await
+}
+
+/// [`send_stream_request`] with an explicit send-phase deadline.
+///
+/// The deadline covers connect + body upload + response headers and expires
+/// into a retryable [`ProviderError::Network`], so a request that stalls while
+/// writing its (possibly multi-megabyte) body is retried instead of hanging on
+/// the OS TCP retransmission budget. Once headers arrive the deadline is
+/// released; response streaming is governed per-read by the client's
+/// `read_timeout` and the SSE reader.
+pub async fn send_stream_request_with_deadline(
+    builder: reqwest::RequestBuilder,
+    deadline: std::time::Duration,
+) -> Result<reqwest::Response, ProviderError> {
     let url = builder
         .try_clone()
         .and_then(|b| b.build().ok())
         .map(|r| r.url().to_string())
         .unwrap_or_default();
-    builder.send().await.map_err(|e| {
-        ProviderError::Network(crate::provider::error::format_transport_detail(
-            &e,
-            Some(&url),
-        ))
-    })
+    let send = builder.send();
+    match tokio::time::timeout(deadline, send).await {
+        Ok(result) => result.map_err(|e| {
+            ProviderError::Network(crate::provider::error::format_transport_detail(
+                &e,
+                Some(&url),
+            ))
+        }),
+        Err(_) => Err(ProviderError::Network(format!(
+            "request did not connect, upload, or return headers within {}s; URL: {url}",
+            deadline.as_secs()
+        ))),
+    }
 }
 
 /// Check the HTTP status code. Non-2xx responses are read and classified.

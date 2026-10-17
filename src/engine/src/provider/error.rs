@@ -476,6 +476,20 @@ static SHARED_CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock
 /// its reads explicitly, including transports not created by this client.
 pub(crate) const STREAM_READ_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// Deadline for the whole send phase: connect, upload the request body, and
+/// receive response headers.
+///
+/// `read_timeout` above only arms while the client is *reading*, so it cannot
+/// see a request that stalls while writing its body. A large context (hundreds
+/// of thousands of tokens) is a multi-megabyte upload; if the network drops
+/// mid-upload the socket retransmits for the OS TCP budget (many minutes on
+/// macOS) with no timeout pending, and the only thing the user sees is a
+/// spinner. Bounding the send phase turns that into a retryable
+/// [`crate::provider::ProviderError::Network`] so the loop reconnects on its
+/// short network cadence. The response body is deliberately excluded: SSE
+/// streams are legitimately long and are guarded per-read instead.
+pub const STREAM_SEND_TIMEOUT: Duration = Duration::from_secs(120);
+
 /// Timeout for the connect phase only (TCP + TLS handshake).
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -499,6 +513,15 @@ fn build_client() -> Result<reqwest::Client, ProviderError> {
                 format_transport_detail(&e, None)
             ))
         })
+}
+
+/// A client with the shared transport policy but its own connection pool.
+///
+/// Tests that talk to many short-lived origins need this: the shared pool keys
+/// connections by origin, and an origin that has been recycled onto the same
+/// port can hand a stale keep-alive connection to a different server.
+pub fn dedicated_client() -> Result<reqwest::Client, ProviderError> {
+    build_client()
 }
 
 pub fn new_client() -> Result<reqwest::Client, ProviderError> {

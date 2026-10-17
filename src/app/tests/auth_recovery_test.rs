@@ -71,6 +71,7 @@ fn config() -> StreamConfig {
         model_config: None,
         cache_config: Default::default(),
         prompt_cache_key: None,
+        client: None,
     }
 }
 #[tokio::test]

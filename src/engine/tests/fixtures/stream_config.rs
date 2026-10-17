@@ -129,8 +129,20 @@ impl StreamConfigBuilder {
             model_config: self.model_config,
             cache_config: self.cache_config,
             prompt_cache_key: self.prompt_cache_key,
+            client: Some(dedicated_test_client()),
         }
     }
+}
+
+/// Every test config gets its own connection pool.
+///
+/// The shared process client pools keep-alive connections by origin, and these
+/// tests run against hundreds of short-lived mock servers whose ephemeral ports
+/// the OS recycles. A pooled connection belonging to a server that is gone can
+/// then be handed to a different server's request, which shows up as a truncated
+/// or missing response. Isolation removes that cross-test channel entirely.
+fn dedicated_test_client() -> reqwest::Client {
+    evotengine::provider::error::dedicated_client().unwrap_or_else(|_| reqwest::Client::new())
 }
 
 pub fn resolved_model_config(

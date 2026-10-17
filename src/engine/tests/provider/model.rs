@@ -716,7 +716,14 @@ fn glm_and_deepseek_profiles_are_explicit() {
     assert_eq!(namespaced_reasoner.max_tokens(), 64_000);
     assert_eq!(namespaced_reasoner.default_thinking_level(), High);
 
-    for id in ["deepseek-v4-flash", "deepseek-v4-pro"] {
+    // The V4.1 Flash line is multimodal and offers a `low` effort tier; the
+    // deprecated ids resolve to the same profile as their canonical model.
+    for id in [
+        "deepseek-flash",
+        "deepseek-v4.1-flash",
+        "deepseek-v4-flash",
+        "deepseek-v4-flash-vision-exp",
+    ] {
         let model = resolved(
             ApiProtocol::OpenAiCompletions,
             "deepseek",
@@ -734,16 +741,49 @@ fn glm_and_deepseek_profiles_are_explicit() {
             id
         );
         assert_eq!(model.max_tokens(), 384_000, "model: {}", id);
-        assert_eq!(model.input(), [InputModality::Text], "model: {}", id);
+        assert_eq!(
+            model.input(),
+            [InputModality::Text, InputModality::Image],
+            "model: {}",
+            id
+        );
         assert_eq!(
             model.supported_thinking_levels(),
-            vec![Off, Low, High, Xhigh, Max],
+            vec![Off, Low, High, Max],
             "model: {}",
             id
         );
         assert_eq!(model.default_thinking_level(), High, "model: {}", id);
         assert!(model.can_disable_thinking(), "model: {}", id);
     }
+
+    // V4 Pro rejects the `low` tier and has no image input.
+    let pro = resolved(
+        ApiProtocol::OpenAiCompletions,
+        "deepseek",
+        "deepseek-v4-pro",
+        "https://api.deepseek.com",
+        Some(OpenAiCompat::deepseek()),
+        RouteCapabilities::default(),
+        ModelOverrides::default(),
+    );
+    assert_eq!(pro.context_window(), 616_000);
+    assert_eq!(pro.advertised_context_window(), 1_000_000);
+    assert_eq!(pro.max_tokens(), 384_000);
+    assert_eq!(pro.input(), [InputModality::Text]);
+    assert_eq!(pro.supported_thinking_levels(), vec![Off, High, Max]);
+    assert_eq!(pro.default_thinking_level(), High);
+
+    let namespaced_flash =
+        ModelConfig::openai("deepseek/deepseek-v4.1-flash", "DeepSeek V4.1 Flash");
+    assert_eq!(namespaced_flash.context_window(), 616_000);
+    assert_eq!(namespaced_flash.input(), [
+        InputModality::Text,
+        InputModality::Image
+    ]);
+    assert_eq!(namespaced_flash.supported_thinking_levels(), vec![
+        Off, Low, High, Max
+    ]);
 }
 
 #[test]

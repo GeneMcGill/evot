@@ -189,6 +189,7 @@ pub fn prompt_config(
         model_config: Some(model_config),
         cache_config: Default::default(),
         prompt_cache_key: None,
+        client: None,
     })
 }
 

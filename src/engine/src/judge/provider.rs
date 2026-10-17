@@ -89,6 +89,7 @@ impl ProviderJudge {
             model_config: self.model_config.clone(),
             cache_config: CacheConfig::default(),
             prompt_cache_key: self.session_id.clone(),
+            client: None,
         }
     }
 }

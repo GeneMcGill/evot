@@ -127,6 +127,7 @@ pub(super) async fn stream_assistant_response(
             model_config: config.model_config.clone(),
             cache_config: config.cache_config.clone(),
             prompt_cache_key: context.prompt_cache_key.clone(),
+            client: None,
         };
 
         // Emit one logical call start. Long-wait re-probes (quota/outage)

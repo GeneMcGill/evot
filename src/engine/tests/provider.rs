@@ -31,4 +31,7 @@ mod legacy_bridge;
 #[path = "provider/session_header.rs"]
 mod session_header;
 
+#[path = "provider/transport_isolation.rs"]
+mod transport_isolation;
+
 mod fixtures;

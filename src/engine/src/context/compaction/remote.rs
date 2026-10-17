@@ -209,6 +209,7 @@ pub async fn compact(
         model_config: ctx.model_config.clone(),
         cache_config: ctx.cache_config.clone(),
         prompt_cache_key: ctx.prompt_cache_key.clone(),
+        client: None,
     };
     let mut body = crate::provider::openai_responses::request::build_request_body(&config);
     if let Some(input) = body.get_mut("input").and_then(|v| v.as_array_mut()) {

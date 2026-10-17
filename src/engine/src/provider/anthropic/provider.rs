@@ -75,7 +75,7 @@ impl AnthropicProvider {
             config.model, is_oauth, url
         );
 
-        let client = crate::provider::error::new_client()?;
+        let client = config.http_client()?;
         let mut builder = client.post(&url).header("content-type", "application/json");
 
         // Session identity for observability. Claude CLI carries this inside

@@ -135,6 +135,7 @@ async fn call_provider(
         model_config: ctx.model_config.clone(),
         cache_config: CacheConfig::default(),
         prompt_cache_key: None,
+        client: None,
     };
 
     let thinking_level = crate::provider::effective_thinking_level(

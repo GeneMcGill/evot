@@ -80,7 +80,7 @@ impl BedrockProvider {
             ));
         }
 
-        let client = crate::provider::error::new_client()?;
+        let client = config.http_client()?;
         let mut request = client.post(&url).header("content-type", "application/json");
 
         // Add AWS auth headers. In a real implementation, this would use SigV4.
@@ -96,12 +96,8 @@ impl BedrockProvider {
             request = request.header("authorization", format!("Bearer {}", config.api_key));
         }
 
-        let response = request.json(&body).send().await.map_err(|e| {
-            ProviderError::Network(crate::provider::error::format_transport_detail(
-                &e,
-                Some(&url),
-            ))
-        })?;
+        let response =
+            crate::provider::stream::http::send_stream_request(request.json(&body)).await?;
 
         if !response.status().is_success() {
             let status = response.status();

@@ -81,6 +81,53 @@ async fn silent_response_body_timeout_without_an_explicit_interrupt(
     silent_http_peer(true).await
 }
 
+#[tokio::test]
+async fn an_upload_stall_is_bounded_and_retryable_instead_of_hanging(
+) -> Result<(), Box<dyn std::error::Error>> {
+    use std::time::Duration;
+    use std::time::Instant;
+
+    // A peer that accepts the connection, never reads a byte, and never
+    // answers: the client blocks in the body write where `read_timeout` cannot
+    // arm. This is the shape of a network drop during upload of a large
+    // context.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let url = format!("http://{}", listener.local_addr()?);
+    let peer = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await?;
+        futures::future::pending::<()>().await;
+        drop(socket);
+        Ok::<(), std::io::Error>(())
+    });
+    let client = evotengine::provider::http_client()?;
+    // Larger than any socket send buffer, so the write itself must block.
+    let body = vec![b'x'; 32 * 1024 * 1024];
+    let started = Instant::now();
+    let error = evotengine::provider::stream::http::send_stream_request_with_deadline(
+        client.post(url).body(body),
+        Duration::from_secs(2),
+    )
+    .await
+    .err()
+    .ok_or("stalled upload unexpectedly succeeded")?;
+    peer.abort();
+    let _ = peer.await;
+    assert!(matches!(error, ProviderError::Network(_)), "{error:?}");
+    assert!(
+        error
+            .to_string()
+            .contains("did not connect, upload, or return headers"),
+        "{error}"
+    );
+    assert!(evotengine::retry::should_retry(&error));
+    assert!(
+        started.elapsed() < Duration::from_secs(15),
+        "{:?}",
+        started.elapsed()
+    );
+    Ok(())
+}
+
 #[test]
 fn standard_model_errors_are_fatal_across_protocols_without_gateway_hints() {
     for value in [
@@ -497,6 +544,7 @@ async fn check_error_status_truncates_oversized_bodies() {
 mod request_compression {
     use std::io::Read;
 
+    use evotengine::provider::stream::http::forget_request_encoding;
     use evotengine::provider::stream::http::origin_accepts_gzip;
     use evotengine::provider::stream::http::send_json_stream_request;
     use wiremock::matchers::header;
@@ -536,6 +584,7 @@ mod request_compression {
     #[tokio::test]
     async fn plain_until_the_origin_advertises_then_gzip() {
         let server = MockServer::start().await;
+        forget_request_encoding(&server.uri());
         Mock::given(method("POST"))
             .respond_with(advertising())
             .mount(&server)
@@ -559,6 +608,7 @@ mod request_compression {
     #[tokio::test]
     async fn an_origin_that_never_advertises_always_gets_plain_json() {
         let server = MockServer::start().await;
+        forget_request_encoding(&server.uri());
         Mock::given(method("POST"))
             .respond_with(ResponseTemplate::new(200))
             .mount(&server)
@@ -577,6 +627,7 @@ mod request_compression {
     #[tokio::test]
     async fn small_bodies_are_not_compressed_even_where_accepted() {
         let server = MockServer::start().await;
+        forget_request_encoding(&server.uri());
         Mock::given(method("POST"))
             .respond_with(advertising())
             .mount(&server)
@@ -594,6 +645,7 @@ mod request_compression {
     #[tokio::test]
     async fn a_415_to_gzip_resends_plain_and_forgets_the_origin() {
         let server = MockServer::start().await;
+        forget_request_encoding(&server.uri());
         Mock::given(method("POST"))
             .and(header("content-encoding", "gzip"))
             .respond_with(ResponseTemplate::new(415))

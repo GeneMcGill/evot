@@ -109,7 +109,7 @@ async fn send(
     config: &StreamConfig,
     body: serde_json::Value,
 ) -> Result<reqwest::Response, ProviderError> {
-    let client = crate::provider::error::new_client()?;
+    let client = config.http_client()?;
     let mut builder = client
         .post(url)
         .header("content-type", "application/json")
