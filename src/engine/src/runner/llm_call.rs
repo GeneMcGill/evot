@@ -23,6 +23,11 @@ const QUOTA_PROBE_MAX: std::time::Duration = std::time::Duration::from_secs(60);
 /// not a reason to discard the run.
 const OUTAGE_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(60);
 
+/// Network recovery must not wait behind a minute-long service-outage backoff.
+/// Keep reconnect probes frequent even after the bounded retry budget runs out;
+/// explicit quota and server failures retain their calmer existing cadence.
+const NETWORK_RETRY_MAX_DELAY: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// A missing protocol terminal event can be a one-off upstream generation
 /// failure, but identical replays often reproduce it (for example malformed
 /// tool arguments). Keep recovery quick and bounded instead of treating it as
@@ -456,6 +461,11 @@ pub(super) async fn stream_assistant_response(
                 .ok();
                 attempt += 1;
                 let delay = retry.delay_for_attempt(attempt);
+                let delay = if matches!(e, ProviderError::Network(_)) {
+                    delay.min(NETWORK_RETRY_MAX_DELAY)
+                } else {
+                    delay
+                };
                 tx.send(AgentEvent::LlmCallRetry {
                     turn,
                     attempt,
@@ -489,7 +499,11 @@ pub(super) async fn stream_assistant_response(
                 // fail-fast contract and never enters this state.
                 forward_handle.abort();
                 let _ = forward_handle.await;
-                let delay = OUTAGE_RETRY_DELAY;
+                let delay = if matches!(e, ProviderError::Network(_)) {
+                    NETWORK_RETRY_MAX_DELAY
+                } else {
+                    OUTAGE_RETRY_DELAY
+                };
                 tx.send(AgentEvent::OutageWait {
                     delay_ms: delay.as_millis() as u64,
                     error: e.to_string(),

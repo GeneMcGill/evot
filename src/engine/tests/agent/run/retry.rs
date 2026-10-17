@@ -473,7 +473,7 @@ async fn test_provider_declared_transient_error_retries_then_succeeds() {
 #[tokio::test(start_paused = true)]
 async fn test_retry_exhausted_enters_outage_wait_and_recovers() {
     // 5 failures: 1 initial + 2 bounded retries all fail, then the loop must
-    // switch to indefinite outage probing (60 s cadence) instead of failing
+    // switch to indefinite network probing (10 s cadence) instead of failing
     // the run, and succeed once the upstream recovers on the 6th call.
     let provider: std::sync::Arc<FailThenSucceedProvider> =
         std::sync::Arc::new(FailThenSucceedProvider {
@@ -561,7 +561,7 @@ async fn test_retry_exhausted_enters_outage_wait_and_recovers() {
         .collect();
     assert_eq!(outage_waits.len(), 3);
     for (delay_ms, error) in &outage_waits {
-        assert_eq!(*delay_ms, 60_000);
+        assert_eq!(*delay_ms, 10_000);
         assert!(error.contains("connection reset"));
     }
     // Bounded retries stay bounded: exactly 2 LlmCallRetry events, and outage

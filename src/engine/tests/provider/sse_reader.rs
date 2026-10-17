@@ -73,6 +73,67 @@ async fn cancellation_interrupts_idle_reads_and_partial_frame_errors_are_visible
     Ok(())
 }
 
+#[tokio::test(start_paused = true)]
+async fn silent_or_partial_connections_fail_within_one_minute() {
+    use std::time::Duration;
+
+    use futures::StreamExt;
+    for prefix in [b"".as_slice(), b"data: partial", b": heartbeat\n\n"] {
+        let source = stream::iter(vec![Ok(prefix.to_vec())]).chain(stream::pending());
+        let mut reader = SseReader::from_stream(source);
+        let start = tokio::time::Instant::now();
+        let error = reader.next(&CancellationToken::new()).await.err();
+        assert_eq!(
+            error.as_deref(),
+            Some("Stream read timed out after 60s without data")
+        );
+        assert_eq!(start.elapsed(), Duration::from_secs(60));
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn heartbeats_and_slow_output_reset_read_deadlines_without_a_total_time_limit() -> TestResult
+{
+    use std::time::Duration;
+
+    let source = stream::unfold(0, |index| async move {
+        if index > 40 {
+            return None;
+        }
+        tokio::time::sleep(Duration::from_secs(59)).await;
+        let bytes = if index < 40 {
+            b": heartbeat\n\n".to_vec()
+        } else {
+            b"data: recovered\n\n".to_vec()
+        };
+        Some((Ok(bytes), index + 1))
+    });
+    let mut reader = SseReader::from_stream(source);
+    let start = tokio::time::Instant::now();
+    let event = reader
+        .next(&CancellationToken::new())
+        .await?
+        .ok_or("missing event")?;
+    assert_eq!(event.data, "recovered");
+    assert!(start.elapsed() > Duration::from_secs(35 * 60));
+    assert!(reader.next(&CancellationToken::new()).await?.is_none());
+    Ok(())
+}
+
+#[tokio::test(start_paused = true)]
+async fn timed_out_readers_release_the_dead_connection_on_drop() {
+    let held = std::sync::Arc::new(());
+    let weak = std::sync::Arc::downgrade(&held);
+    let source = stream::unfold(held, |held| async move {
+        futures::future::pending::<()>().await;
+        Some((Ok(Vec::new()), held))
+    });
+    let mut reader = SseReader::from_stream(source);
+    assert!(reader.next(&CancellationToken::new()).await.is_err());
+    drop(reader);
+    assert!(weak.upgrade().is_none());
+}
+
 #[tokio::test]
 async fn oversize_unterminated_frames_fail_instead_of_accumulating() {
     let mut reader =

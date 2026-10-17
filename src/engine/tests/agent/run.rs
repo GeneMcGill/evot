@@ -10,6 +10,8 @@ mod compaction;
 mod content_preservation;
 #[path = "run/core.rs"]
 mod core;
+#[path = "run/network_recovery.rs"]
+mod network_recovery;
 #[path = "run/retry.rs"]
 mod retry;
 #[path = "run/steering.rs"]

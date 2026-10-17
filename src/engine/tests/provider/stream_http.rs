@@ -6,6 +6,81 @@ use evotengine::provider::stream::http::extract_json_error_message;
 use evotengine::provider::stream::http::StreamResponseKind;
 use evotengine::provider::ProviderError;
 
+/// Exercise the real shared client, not just the injected SSE transport. The
+/// peer accepts the request but never sends headers (or stops after headers).
+async fn silent_http_peer(send_headers: bool) -> Result<(), Box<dyn std::error::Error>> {
+    use std::time::Duration;
+
+    use tokio::io::AsyncReadExt;
+    use tokio::io::AsyncWriteExt;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let url = format!("http://{}", listener.local_addr()?);
+    let (ready_tx, mut ready_rx) = tokio::sync::oneshot::channel();
+    let peer = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await?;
+        let mut request = Vec::new();
+        let mut buffer = [0; 4096];
+        while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+            let count = socket.read(&mut buffer).await?;
+            if count == 0 {
+                return Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof));
+            }
+            request.extend_from_slice(&buffer[..count]);
+        }
+        if send_headers {
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\n")
+                .await?;
+        }
+        let _ = ready_tx.send(());
+        futures::future::pending::<()>().await;
+        drop(socket);
+        Ok::<(), std::io::Error>(())
+    });
+    let client = evotengine::provider::http_client()?;
+    let request = evotengine::provider::stream::http::send_stream_request(client.get(url));
+    tokio::pin!(request);
+    let start;
+    let result = if send_headers {
+        let response = request.await?;
+        let body = evotengine::provider::stream::http::read_text_body(response);
+        tokio::pin!(body);
+        assert!(futures::poll!(&mut body).is_pending());
+        ready_rx.await?;
+        tokio::time::pause();
+        start = tokio::time::Instant::now();
+        body.await
+    } else {
+        tokio::select! {
+            ready = &mut ready_rx => ready?,
+            result = &mut request => return Err(format!("request ended before peer stalled: {result:?}").into()),
+        }
+        tokio::time::pause();
+        start = tokio::time::Instant::now();
+        request.await.map(|_| String::new())
+    };
+    peer.abort();
+    let _ = peer.await;
+    let error = result.err().ok_or("silent peer unexpectedly succeeded")?;
+    assert!(matches!(error, ProviderError::Network(_)));
+    assert!(evotengine::retry::should_retry(&error));
+    assert!(start.elapsed() <= Duration::from_secs(61));
+    Ok(())
+}
+
+#[tokio::test]
+async fn silent_response_headers_timeout_without_an_explicit_interrupt(
+) -> Result<(), Box<dyn std::error::Error>> {
+    silent_http_peer(false).await
+}
+
+#[tokio::test]
+async fn silent_response_body_timeout_without_an_explicit_interrupt(
+) -> Result<(), Box<dyn std::error::Error>> {
+    silent_http_peer(true).await
+}
+
 #[test]
 fn standard_model_errors_are_fatal_across_protocols_without_gateway_hints() {
     for value in [

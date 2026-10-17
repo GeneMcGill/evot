@@ -92,7 +92,10 @@ impl SseReader {
             let chunk = tokio::select! {
                 biased;
                 _ = cancel.cancelled() => return Err("cancelled".into()),
-                chunk = self.stream.next() => chunk,
+                chunk = tokio::time::timeout(
+                    crate::provider::error::STREAM_READ_TIMEOUT,
+                    self.stream.next(),
+                ) => chunk.map_err(|_| "Stream read timed out after 60s without data".to_string())?,
             };
             match chunk {
                 Some(Ok(bytes)) => self.buffer.extend_from_slice(&bytes),
