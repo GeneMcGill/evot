@@ -102,8 +102,13 @@ export class LoopSession {
     this.#deps.requestRender()
   }
 
+  /** The host abandons the run on reset, so no later endRun will arrive. */
   reset(cause: StopCause = 'session_switch'): void {
     this.#controller.stop(cause)
+    this.#runBegun = false
+    this.#flushStopNotice()
+    this.#syncWaiting()
+    this.#deps.requestRender()
   }
 
   /** The confirmed `Esc` while parked between ticks: same as `/loop stop`,

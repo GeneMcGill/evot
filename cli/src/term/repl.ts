@@ -2899,11 +2899,14 @@ export async function startRepl(opts: ReplOptions): Promise<void> {
 
   function interruptStream(id: string, text: string) {
     unfreezeTerminalTitle()
-    loopSession.reset('user')
     // Revoke ownership before aborting: native abort settles asynchronously,
     // and its rejected Promise must not later emit a second Interrupted/error
     // or clear a newer query that the user starts immediately afterward.
     revokeRun()
+    // Esc cancels this turn, not the recurring task. Only an explicit loop
+    // stop (or confirmed Esc while parked) should cancel future wakeups.
+    loopSession.endRun('interrupted')
+    if (loopSession.active) text += ' Loop remains active; /loop stop to stop.'
     // If an interactive host-tool overlay is awaiting, resolve it as cancelled
     // so the suspended dispatch in runQuery unblocks instead of hanging the
     // run loop forever.

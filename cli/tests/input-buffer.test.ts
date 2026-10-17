@@ -85,6 +85,33 @@ describe('TerminalInputBuffer', () => {
     expect(buffer.hasPending).toBe(false)
   })
 
+  test('SS3 sequences are safe at every chunk boundary', () => {
+    for (const [sequence, expected] of [
+      ['\x1bOP', []], ['\x1bOQ', []], ['\x1bO1;2P', []],
+      ['\x1bOA', [{ type: 'up' }]], ['\x1bO1;5D', [{ type: 'word-left' }]],
+    ] as const) {
+      for (let split = 1; split < sequence.length; split++) {
+        const buffer = new TerminalInputBuffer()
+        expect(buffer.write(sequence.slice(0, split))).toEqual([])
+        expect(buffer.write(`${sequence.slice(split)}x`)).toEqual([...expected, { type: 'char', char: 'x' }])
+        expect(buffer.hasPending).toBe(false)
+      }
+    }
+  })
+
+  test('forcing truncated terminal sequences never synthesizes Escape', () => {
+    for (const sequence of ['\x1b[', '\x1b[1;', '\x1bO', '\x1bO1;', '\x1b]title', '\x1bPresponse', '\x1b_response', '\x1b^response']) {
+      for (const flush of ['flushPending', 'end'] as const) {
+        const buffer = new TerminalInputBuffer()
+        expect(buffer.write(sequence)).toEqual([])
+        expect(buffer.hasAmbiguousEscape).toBe(false)
+        expect(buffer[flush]()).toEqual([])
+        expect(buffer.hasPending).toBe(false)
+        expect(buffer.write('x')).toEqual([{ type: 'char', char: 'x' }])
+      }
+    }
+  })
+
   test('discards incomplete paste without callbacks or events', () => {
     let emptyPastes = 0
     const buffer = new TerminalInputBuffer({ onEmptyPaste: () => { emptyPastes++ } })

@@ -125,8 +125,8 @@ function nextInputUnit(input: string, force: boolean): InputUnit | null {
 
   const introducer = input[1]!
   if (introducer === '[') {
-    const finalIndex = findCsiFinal(input)
-    if (finalIndex < 0) return force ? { length: 1, parse: true } : null
+    const finalIndex = findSequenceFinal(input)
+    if (finalIndex < 0) return force ? { length: input.length, parse: false } : null
     return { length: finalIndex + 1, parse: true }
   }
 
@@ -136,8 +136,9 @@ function nextInputUnit(input: string, force: boolean): InputUnit | null {
   }
 
   if (introducer === 'O') {
-    if (input.length < 3) return force ? { length: 1, parse: true } : null
-    return { length: 3, parse: true }
+    const finalIndex = findSequenceFinal(input)
+    if (finalIndex < 0) return force ? { length: input.length, parse: false } : null
+    return { length: finalIndex + 1, parse: true }
   }
 
   const codePoint = input.codePointAt(1)
@@ -145,7 +146,7 @@ function nextInputUnit(input: string, force: boolean): InputUnit | null {
   return { length: 1 + characterLength, parse: true }
 }
 
-function findCsiFinal(input: string): number {
+function findSequenceFinal(input: string): number {
   for (let index = 2; index < input.length; index++) {
     const code = input.charCodeAt(index)
     if (code >= 0x40 && code <= 0x7e) return index
@@ -162,5 +163,6 @@ function controlStringUnit(input: string, force: boolean, allowBel: boolean): In
   else if (belIndex >= 0) end = belIndex + 1
   else if (stIndex >= 0) end = stIndex + 2
   if (end >= 0) return { length: end, parse: false }
-  return force ? { length: 1, parse: true } : null
+  // A truncated terminal response is still not a bare Escape press.
+  return force ? { length: input.length, parse: false } : null
 }

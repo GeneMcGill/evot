@@ -147,6 +147,60 @@ describe('LoopController', () => {
     expect(c.active).toBe(true)
   })
 
+  test('interrupted turns retain the loop without spending the missing-wakeup budget', () => {
+    const { c, stops } = controller()
+    c.start({ kind: 'dynamic' }, userTask('p'), 0)
+    for (let i = 0; i < 4; i++) {
+      c.beginRun(i)
+      c.endRun('interrupted', i)
+      expect(c.remainingMs(i)).toBe(60_000)
+      expect(c.snapshot?.reason).toContain('loop will resume')
+    }
+    expect(c.active).toBe(true)
+    expect(stops).toEqual([])
+    c.beginRun(10)
+    c.endRun('ok', 10)
+    expect(c.remainingMs(10)).toBe(KEEPALIVE_SECONDS * 1000)
+    c.beginRun(11)
+    c.endRun('ok', 11)
+    expect(stops).toEqual(['no_reschedule'])
+  })
+
+  test('interruptions preserve an existing schedule in both loop modes', () => {
+    for (const mode of [{ kind: 'dynamic' }, { kind: 'fixed', intervalMs: 300_000 }] as const) {
+      const { c } = controller()
+      c.start(mode, userTask('p'), 0)
+      c.beginRun(0)
+      c.schedule({ delaySeconds: 600, reason: 'waiting for review', noop: true }, 0)
+      c.endRun('interrupted', 1000)
+      expect(c.remainingMs(1000)).toBe(599_000)
+      expect(c.snapshot?.reason).toBe('waiting for review')
+      expect(c.snapshot?.noopStreak).toBe(1)
+    }
+  })
+
+  test('an interrupted fixed turn retries at its configured interval', () => {
+    const { c, stops } = controller()
+    c.start({ kind: 'fixed', intervalMs: 300_000 }, userTask('p'), 0)
+    for (let i = 0; i < 4; i++) {
+      c.beginRun(i)
+      c.endRun('interrupted', i)
+      expect(c.remainingMs(i)).toBe(300_000)
+    }
+    expect(stops).toEqual([])
+  })
+
+  test('interruptions neither count as errors nor clear existing errors', () => {
+    const { c, stops } = controller()
+    c.start({ kind: 'fixed', intervalMs: 60_000 }, userTask('p'), 0)
+    c.beginRun(0); c.endRun('error', 0)
+    c.beginRun(1); c.endRun('interrupted', 1)
+    c.beginRun(2); c.endRun('error', 2)
+    expect(c.active).toBe(true)
+    c.beginRun(3); c.endRun('error', 3)
+    expect(stops).toEqual(['errors'])
+  })
+
   test('max age stops at run start', () => {
     const { c, stops } = controller()
     c.start({ kind: 'dynamic' }, userTask('p'), 0)
@@ -319,6 +373,63 @@ describe('LoopSession', () => {
     const wait = s.waitRemaining(t0 + 23_000)
     expect(wait?.label).toMatch(/^19m3\ds$/)
     expect(wait?.remainingMs).toBeGreaterThan(19 * 60_000)
+    s.dispose()
+  })
+
+  test('interrupting a loop turn keeps the wakeup tool and lets user turns leave its timer untouched', () => {
+    const { s, notices } = session()
+    s.handleCommand('/loop watch PR', 'watch PR')
+    const extension = s.extension
+    s.endRun('interrupted')
+    expect(s.active).toBe(true)
+    expect(s.runInFlight).toBe(false)
+    expect(s.waiting).toBe(true)
+    expect(s.extension).toBe(extension)
+    expect(notices).toEqual([])
+    const nextFireAt = s.snapshot?.nextFireAt
+    // The native run's late finally or a subsequent user turn cannot finish
+    // the old tick again or consume its keepalive allowance.
+    s.endRun('error')
+    s.endRun('ok')
+    s.endRun('interrupted')
+    expect(s.snapshot?.nextFireAt).toBe(nextFireAt)
+    expect(s.active).toBe(true)
+    expect(s.cancelWait()).toBe(true)
+    expect(notices.at(-1)).toContain('stopped by you')
+    s.dispose()
+  })
+
+  test('reset closes an abandoned run and reports its stop immediately', () => {
+    const { s, notices } = session()
+    s.handleCommand('/loop old session', 'old session')
+    s.reset()
+    expect(s.active).toBe(false)
+    expect(s.runInFlight).toBe(false)
+    expect(s.waiting).toBe(false)
+    expect(notices).toHaveLength(1)
+    expect(notices[0]).toContain('session changed')
+    s.endRun('ok')
+    expect(notices).toHaveLength(1)
+    s.handleCommand('/loop new session', 'new session')
+    s.endRun('interrupted')
+    expect(s.active).toBe(true)
+    expect(s.runInFlight).toBe(false)
+    expect(notices).toHaveLength(1)
+    s.dispose()
+  })
+
+  test('an explicit stop during a turn is flushed when that turn is interrupted', () => {
+    const { s, notices } = session()
+    s.handleCommand('/loop watch PR', 'watch PR')
+    s.handleCommand('/loop stop', 'stop')
+    expect(notices).toEqual([])
+    s.endRun('interrupted')
+    expect(s.runInFlight).toBe(false)
+    expect(s.active).toBe(false)
+    expect(notices).toHaveLength(1)
+    expect(notices[0]).toContain('stopped by you')
+    s.endRun('ok')
+    expect(notices).toHaveLength(1)
     s.dispose()
   })
 

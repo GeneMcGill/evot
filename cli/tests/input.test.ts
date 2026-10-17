@@ -173,6 +173,41 @@ describe('parseInput', () => {
 
   })
 
+  describe('escape disambiguation', () => {
+    test('SS3 application-mode arrows and home/end are navigation, not Esc', () => {
+      for (const [suffix, type] of [['A', 'up'], ['B', 'down'], ['C', 'right'], ['D', 'left'], ['H', 'home'], ['F', 'end']]) {
+        expect(parse(`\x1bO${suffix}`)).toEqual([{ type }])
+      }
+      expect(parse('\x1bO1;5D')).toEqual([{ type: 'word-left' }])
+    })
+
+    test('unsupported function keys, Alt combinations and terminal responses never emit Esc', () => {
+      for (const sequence of ['\x1bOP', '\x1bOQ', '\x1bOR', '\x1bOS', '\x1bO1;2P', '\x1bx', '\x1b😀', '\x1b[15~', '\x1b]title\x07', '\x1bPresponse\x1b\\']) {
+        expect(parse(sequence)).toEqual([])
+        expect(parse(`${sequence}a`)).toEqual([{ type: 'char', char: 'a' }])
+      }
+    })
+
+    test('incomplete SS3 and control strings do not fall back to Esc', () => {
+      for (const sequence of ['\x1bO', '\x1bO1;', '\x1b]title', '\x1bPresponse']) {
+        expect(parse(sequence)).toEqual([])
+      }
+    })
+
+    test('only plain Kitty Escape key presses count, not repeats, releases or modified Esc', () => {
+      expect(parse('\x1b[27u')).toEqual([{ type: 'escape' }])
+      expect(parse('\x1b[27;1:1u')).toEqual([{ type: 'escape' }])
+      for (const sequence of ['\x1b[27;1:2u', '\x1b[27;1:3u', '\x1b[27;3u', '\x1b[27;5u']) {
+        expect(parse(sequence)).toEqual([])
+      }
+      expect(parse('\x1b[97;1:2u')).toEqual([{ type: 'char', char: 'a' }])
+    })
+
+    test('two actual Escape presses are preserved', () => {
+      expect(parse('\x1b\x1b')).toEqual([{ type: 'escape' }, { type: 'escape' }])
+    })
+  })
+
   describe('bracketed paste', () => {
     test('parses pasted text', () => {
       const input = '\x1b[200~hello world\x1b[201~'

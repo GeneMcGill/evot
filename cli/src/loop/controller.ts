@@ -34,7 +34,7 @@ export type StopCause =
   | 'no_reschedule'
   | 'session_switch'
 
-export type RunOutcome = 'ok' | 'error'
+export type RunOutcome = 'ok' | 'error' | 'interrupted'
 
 export interface LoopEvents {
   stopped: (cause: StopCause, snapshot: LoopSnapshot) => void
@@ -123,6 +123,18 @@ export class LoopController {
   endRun(outcome: RunOutcome, now = Date.now()): void {
     const state = this.#state
     if (!state?.active) return
+
+    // Interrupting a turn is not a request to cancel the recurring task and
+    // must not spend the missing-wakeup/error budget. Retain a scheduled wakeup,
+    // or retry after a short delay so the user has time to amend the task.
+    if (outcome === 'interrupted') {
+      if (state.nextFireAt === null) {
+        const delay = state.mode.kind === 'fixed' ? state.mode.intervalMs : MIN_DELAY_SECONDS * 1000
+        state.nextFireAt = now + delay
+        state.reason = 'current turn interrupted; loop will resume'
+      }
+      return
+    }
 
     if (outcome === 'error') {
       this.#consecutiveErrors += 1

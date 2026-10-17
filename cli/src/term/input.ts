@@ -187,6 +187,28 @@ export function parseInput(data: Buffer): KeyEvent[] {
         continue
       }
 
+      // Application-mode arrows and F1–F4 use SS3, not CSI. Consume the
+      // whole sequence even when unsupported; its ESC is not an Escape key.
+      if (str[i + 1] === 'O') {
+        const sequence = str.slice(i + 2).match(/^[\x20-\x3f]*[\x40-\x7e]/)?.[0]
+        if (sequence) {
+          const cursor = parseModifiedCursor(sequence)
+          const event = cursor?.event ?? (sequence.length === 1 ? modifiedArrowEvent(sequence, 0) : undefined)
+          if (event) events.push(event)
+        }
+        i += sequence ? 2 + sequence.length : str.length - i
+        continue
+      }
+
+      // Terminal responses/control strings must never become Escape keys,
+      // including incomplete strings passed directly to this parser.
+      if (']P_^'.includes(str[i + 1] ?? '\0')) {
+        const rest = str.slice(i + 2)
+        const end = rest.match(str[i + 1] === ']' ? /\x07|\x1b\\/ : /\x1b\\/)
+        i = end ? i + 2 + (end.index ?? 0) + end[0].length : str.length
+        continue
+      }
+
       // Alt+Enter: ESC followed by CR (0x0d). Some terminals also use this
       // as a custom Shift+Enter mapping; both mean "insert newline" in evot.
       if (i + 1 < str.length && str.charCodeAt(i + 1) === 13) {
@@ -204,6 +226,12 @@ export function parseInput(data: Buffer): KeyEvent[] {
         if (next === 'f' || next === 'F') { events.push({ type: 'word-right' }); i += 2; continue }
         if (next === 'd' || next === 'D') { events.push({ type: 'alt-d' }); i += 2; continue }
         if (nextCode === 0x7f || nextCode === 0x08) { events.push({ type: 'alt-backspace' }); i += 2; continue }
+        // Unknown Alt combinations are not bare Escape presses. Preserve
+        // consecutive actual Esc presses by consuming those one at a time.
+        if (next !== '\x1b') {
+          i += 1 + (str.codePointAt(i + 1)! > 0xffff ? 2 : 1)
+          continue
+        }
       }
 
       // Bare escape
@@ -342,7 +370,11 @@ function parseCsiU(rest: string): ParsedSequence | null {
   const modValue = match[2] ? Number.parseInt(match[2], 10) : 1
   const modifier = modValue - 1
   const eventType = match[3] ? Number.parseInt(match[3], 10) : 1
-  const event = eventType === 3 ? undefined : keyEventFromCodepoint(codepoint, modifier)
+  // A held Esc can generate repeats; one physical press must not satisfy
+  // the two-press interrupt confirmation. Other keys still auto-repeat.
+  const event = eventType === 3 || (codepoint === 27 && eventType !== 1)
+    ? undefined
+    : keyEventFromCodepoint(codepoint, modifier)
   return { length: match[0].length, event }
 }
 
@@ -381,7 +413,7 @@ function parseModifiedCursor(rest: string): ParsedSequence | null {
   return null
 }
 
-function modifiedArrowEvent(final: string, modifier: number): KeyEvent {
+function modifiedArrowEvent(final: string, modifier: number): KeyEvent | undefined {
   const normalized = modifier & ~(64 + 128)
   const wordMod = (normalized & MOD_ALT) !== 0 || (normalized & MOD_CTRL) !== 0
   switch (final) {
@@ -391,7 +423,7 @@ function modifiedArrowEvent(final: string, modifier: number): KeyEvent {
     case 'D': return { type: wordMod ? 'word-left' : 'left' }
     case 'F': return { type: 'end' }
     case 'H': return { type: 'home' }
-    default: return { type: 'escape' }
+    default: return undefined
   }
 }
 
@@ -418,7 +450,7 @@ function keyEventFromCodepoint(codepoint: number, modifier: number): KeyEvent | 
     if ((normalizedModifier & MOD_ALT) !== 0) return { type: 'alt-backspace' }
     return { type: 'backspace' }
   }
-  if (codepoint === 27) return { type: 'escape' }
+  if (codepoint === 27) return normalizedModifier === 0 ? { type: 'escape' } : undefined
 
   // Kitty CSI-u encodes arrows as special codepoints 57348–57351 (or use modified cursor).
   // Also handle letter keys with alt for word ops (alt+b/f/d).
